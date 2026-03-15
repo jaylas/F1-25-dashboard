@@ -317,9 +317,13 @@ class BrakeGraphWidget(QWidget):
         self._track_length = 0.0
 
     def add_sample(self, dist: float, brake: float, lap: int) -> None:
+        # Reset on lap change OR when distance drops significantly (finish line)
         if lap != self._last_lap_number:
             self._live_samples.clear()
             self._last_lap_number = lap
+        elif self._live_samples and dist < self._current_distance - 500:
+            self._live_samples.clear()
+
         self._current_distance = dist
         self._live_samples.append((dist, brake))
 
