@@ -299,6 +299,7 @@ class BrakeGraphWidget(QWidget):
 
         self._ref_samples: list[tuple[float, float]] = []
         self._track_length: float = 0.0
+        self._ref_offset: float = 0.0  # Shift reference data (metres)
 
     @property
     def window_metres(self) -> float:
@@ -425,9 +426,10 @@ class BrakeGraphWidget(QWidget):
         p.setPen(QPen(QColor(255, 255, 255, 60), 1, Qt.PenStyle.DashLine))
         p.drawLine(QPointF(cx, gy), QPointF(cx, gy + gh))
 
-        # Reference braking (grey)
+        # Reference braking (grey) — apply offset
         if self._ref_samples:
-            r = self._build_path(self._ref_samples, gx, gy, gw, gh, vs, ve)
+            shifted = [(d + self._ref_offset, b) for d, b in self._ref_samples]
+            r = self._build_path(shifted, gx, gy, gw, gh, vs, ve)
             if r:
                 rp, rf = r
                 g = QLinearGradient(0, gy, 0, gy + gh)
@@ -512,6 +514,12 @@ class OverlayWindow(QWidget):
         self.setMinimumSize(320, 200)
         self.resize(520, 320)
         self.setMouseTracking(True)  # Enable hover cursor changes
+
+        # Position in top-right corner
+        screen = QApplication.primaryScreen()
+        if screen:
+            sg = screen.availableGeometry()
+            self.move(sg.right() - self.width() - 20, sg.top() + 20)
 
         self.telemetry = TelemetryListener(port=UDP_PORT)
         self.telemetry.telemetry_received.connect(self.on_telemetry)
@@ -599,11 +607,31 @@ class OverlayWindow(QWidget):
         self.brake_graph = BrakeGraphWidget()
         root.addWidget(self.brake_graph, stretch=1)
 
-        # Zoom hint
-        zoom_label = QLabel("Scroll to zoom | Drag corners to resize")
-        zoom_label.setStyleSheet("color: rgba(255,255,255,80); font-size: 10px;")
-        zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        root.addWidget(zoom_label)
+        # Offset row
+        offset_row = QHBoxLayout()
+        offset_row.setSpacing(4)
+
+        self.offset_label = QLabel("Ref offset: 0m")
+        self.offset_label.setStyleSheet("color: rgba(255,255,255,120); font-size: 11px;")
+        offset_row.addWidget(self.offset_label)
+
+        offset_row.addStretch(1)
+
+        btn_minus = QPushButton("◀ -10m")
+        btn_minus.setFixedWidth(60)
+        btn_minus.clicked.connect(lambda: self._adjust_offset(-10))
+        offset_row.addWidget(btn_minus)
+
+        btn_plus = QPushButton("+10m ▶")
+        btn_plus.setFixedWidth(60)
+        btn_plus.clicked.connect(lambda: self._adjust_offset(10))
+        offset_row.addWidget(btn_plus)
+
+        hint = QLabel("Scroll to zoom")
+        hint.setStyleSheet("color: rgba(255,255,255,60); font-size: 10px;")
+        offset_row.addWidget(hint)
+
+        root.addLayout(offset_row)
 
         self.setStyleSheet(
             """
@@ -619,6 +647,13 @@ class OverlayWindow(QWidget):
             QPushButton:hover { border: 1px solid rgba(255,255,255,110); }
             """
         )
+
+    # ── Offset adjustment ────────────────────────────────────────────
+
+    def _adjust_offset(self, delta: float) -> None:
+        self.brake_graph._ref_offset += delta
+        off = self.brake_graph._ref_offset
+        self.offset_label.setText(f"Ref offset: {off:+.0f}m")
 
     # ── Slots ───────────────────────────────────────────────────────
 
