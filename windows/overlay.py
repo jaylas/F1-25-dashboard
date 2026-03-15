@@ -318,6 +318,11 @@ class OverlayWindow(QWidget):
                 self.gear_graph._ref_samples,
             )
         else:
+            self.review_window.update_references(
+                self.brake_graph._ref_samples,
+                self.throttle_graph._ref_samples,
+                self.gear_graph._ref_samples,
+            )
             self.review_window.update_laps(self.historical_laps)
         self.review_window.show()
         self.review_window.raise_()

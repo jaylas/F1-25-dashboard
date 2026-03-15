@@ -1,9 +1,10 @@
-from PyQt6.QtCore import QEvent
+from PyQt6.QtCore import QEvent, QPoint, Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -14,6 +15,8 @@ from widgets.graph import InputGraphWidget
 
 
 class ReviewWindow(QWidget):
+    SINGLE_LAP_BUCKET_METRES = 2.0
+
     def __init__(
         self,
         historical_laps: list[dict],
@@ -29,9 +32,95 @@ class ReviewWindow(QWidget):
         self.ref_brake = ref_brake
         self.ref_throttle = ref_throttle
         self.ref_gear = ref_gear
+        self._middle_drag_active = False
+        self._middle_drag_last_global: QPoint | None = None
 
         self._build_ui()
         self.update_laps(historical_laps)
+
+    def update_references(
+        self,
+        ref_brake: list[tuple[float, float]],
+        ref_throttle: list[tuple[float, float]],
+        ref_gear: list[tuple[float, float]],
+    ) -> None:
+        self.ref_brake = list(ref_brake)
+        self.ref_throttle = list(ref_throttle)
+        self.ref_gear = list(ref_gear)
+
+        if self.ref_brake:
+            self.brake_graph.set_reference(self.ref_brake, 0.0)
+        else:
+            self.brake_graph.clear_reference()
+
+        if self.ref_throttle:
+            self.throttle_graph.set_reference(self.ref_throttle, 0.0)
+        else:
+            self.throttle_graph.clear_reference()
+
+        if self.ref_gear:
+            self.gear_graph.set_reference(self.ref_gear, 0.0)
+        else:
+            self.gear_graph.clear_reference()
+
+        self.brake_graph.update()
+        self.throttle_graph.update()
+        self.gear_graph.update()
+
+    @staticmethod
+    def _downsample_samples(
+        samples: list[tuple[float, float]],
+        bucket_size: float,
+        mode: str,
+    ) -> list[tuple[float, float]]:
+        if not samples or bucket_size <= 0:
+            return samples
+        buckets: dict[int, list[float]] = {}
+        for dist, value in samples:
+            b_idx = int(dist / bucket_size)
+            buckets.setdefault(b_idx, []).append(value)
+
+        out: list[tuple[float, float]] = []
+        for b_idx in sorted(buckets.keys()):
+            dist = b_idx * bucket_size
+            values = buckets[b_idx]
+            avg = sum(values) / len(values)
+            if mode == "gear":
+                out.append((dist, float(round(avg))))
+            else:
+                out.append((dist, avg))
+        return out
+
+    def _fit_all_graphs_to_span(self, datasets: list[list[tuple[float, float]]]) -> None:
+        dists = [d for dataset in datasets for d, _ in dataset]
+        dists.extend(d for d, _ in self.ref_brake)
+        dists.extend(d for d, _ in self.ref_throttle)
+        dists.extend(d for d, _ in self.ref_gear)
+        if not dists:
+            return
+
+        min_d = min(dists)
+        max_d = max(dists)
+        center = (min_d + max_d) / 2.0
+        span = max(200.0, (max_d - min_d) + 200.0)
+
+        # Keep enough headroom so mouse wheel can always zoom to full-lap context.
+        max_window = span + 6000.0
+        for graph in self._all_graphs():
+            graph.MAX_WINDOW = max(graph.MAX_WINDOW, max_window)
+            graph.window_metres = span
+            graph._current_distance = center
+
+    def _zoom_full_view(self) -> None:
+        datasets = [
+            list(self.brake_graph._live_samples),
+            list(self.throttle_graph._live_samples),
+            list(self.gear_graph._live_samples),
+        ]
+        self._fit_all_graphs_to_span(datasets)
+        self.brake_graph.update()
+        self.throttle_graph.update()
+        self.gear_graph.update()
 
     @staticmethod
     def _fit_graph_to_samples(graph: InputGraphWidget, samples: list[tuple[float, float]]) -> None:
@@ -42,6 +131,8 @@ class ReviewWindow(QWidget):
         max_d = max(dists)
         center = (min_d + max_d) / 2.0
         span = max(200.0, (max_d - min_d) + 100.0)
+        # Allow complete zoom-out for long tracks in review mode.
+        graph.MAX_WINDOW = max(graph.MAX_WINDOW, span + 200.0)
         graph.window_metres = span
         graph._current_distance = center
 
@@ -71,6 +162,10 @@ class ReviewWindow(QWidget):
         self.cb_gear.setChecked(True)
         self.cb_gear.toggled.connect(self._update_visibility)
         toolbar.addWidget(self.cb_gear)
+
+        self.full_view_btn = QPushButton("Full View")
+        self.full_view_btn.clicked.connect(self._zoom_full_view)
+        toolbar.addWidget(self.full_view_btn)
 
         toolbar.addStretch(1)
         root.addLayout(toolbar)
@@ -147,6 +242,37 @@ class ReviewWindow(QWidget):
                 self._apply_zoom_factor(factor)
             event.accept()
             return True
+        if watched in self._all_graphs() and event.type() == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.MiddleButton:
+                self._middle_drag_active = True
+                self._middle_drag_last_global = event.globalPosition().toPoint()
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                event.accept()
+                return True
+        if watched in self._all_graphs() and event.type() == QEvent.Type.MouseMove:
+            if (
+                self._middle_drag_active
+                and event.buttons() & Qt.MouseButton.MiddleButton
+                and self._middle_drag_last_global is not None
+            ):
+                current = event.globalPosition().toPoint()
+                delta = current - self._middle_drag_last_global
+                self._middle_drag_last_global = current
+                hbar = self.scroll_area.horizontalScrollBar()
+                vbar = self.scroll_area.verticalScrollBar()
+                if hbar is not None:
+                    hbar.setValue(hbar.value() - delta.x())
+                if vbar is not None:
+                    vbar.setValue(vbar.value() - delta.y())
+                event.accept()
+                return True
+        if watched in self._all_graphs() and event.type() == QEvent.Type.MouseButtonRelease:
+            if event.button() == Qt.MouseButton.MiddleButton:
+                self._middle_drag_active = False
+                self._middle_drag_last_global = None
+                self.unsetCursor()
+                event.accept()
+                return True
         return super().eventFilter(watched, event)
 
     def update_laps(self, historical_laps: list[dict]) -> None:
@@ -195,9 +321,21 @@ class ReviewWindow(QWidget):
             lap_idx = int(text.split(" ")[1]) - 1
             if 0 <= lap_idx < len(self.historical_laps):
                 lap = self.historical_laps[lap_idx]
-                b_data = list(lap.get("brake", []))
-                t_data = list(lap.get("throttle", []))
-                g_data = list(lap.get("gear", []))
+                b_data = self._downsample_samples(
+                    list(lap.get("brake", [])),
+                    self.SINGLE_LAP_BUCKET_METRES,
+                    mode="percent",
+                )
+                t_data = self._downsample_samples(
+                    list(lap.get("throttle", [])),
+                    self.SINGLE_LAP_BUCKET_METRES,
+                    mode="percent",
+                )
+                g_data = self._downsample_samples(
+                    list(lap.get("gear", [])),
+                    self.SINGLE_LAP_BUCKET_METRES,
+                    mode="gear",
+                )
 
         elif text == "Average Lap":
             bucket_size = LAP_AVERAGING_BUCKET_METRES
@@ -229,9 +367,7 @@ class ReviewWindow(QWidget):
         self.throttle_graph._live_samples = t_data
         self.gear_graph._live_samples = g_data
 
-        self._fit_graph_to_samples(self.brake_graph, b_data)
-        self._fit_graph_to_samples(self.throttle_graph, t_data)
-        self._fit_graph_to_samples(self.gear_graph, g_data)
+        self._fit_all_graphs_to_span([b_data, t_data, g_data])
 
         self.brake_graph.update()
         self.throttle_graph.update()
