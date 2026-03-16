@@ -1,3 +1,5 @@
+import math
+
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QWidget
@@ -31,6 +33,7 @@ class InputGraphWidget(QWidget):
 
         self._current_distance: float = 0.0
         self._last_lap_number: int = -1
+        self._lock_start_at_zero: bool = False
 
         self._ref_samples: list[tuple[float, float]] = []
         self._track_length: float = 0.0
@@ -42,6 +45,8 @@ class InputGraphWidget(QWidget):
 
     @window_metres.setter
     def window_metres(self, val: float) -> None:
+        if not math.isfinite(val):
+            return
         self._window_m = max(self.MIN_WINDOW, min(self.MAX_WINDOW, val))
 
     def set_reference(self, samples: list[tuple[float, float]], length: float) -> None:
@@ -66,7 +71,12 @@ class InputGraphWidget(QWidget):
         if lap != self._last_lap_number:
             self._live_samples.clear()
             self._last_lap_number = lap
-        elif self._live_samples and dist < self._current_distance - 500:
+        elif (
+            self._live_samples
+            and dist < self._current_distance - 500
+            and dist < 200.0
+            and self._current_distance > 400.0
+        ):
             self._live_samples.clear()
 
         self._current_distance = dist
@@ -138,9 +148,13 @@ class InputGraphWidget(QWidget):
             p.end()
             return
 
-        half = self._window_m / 2
-        vs = self._current_distance - half
-        ve = self._current_distance + half
+        if getattr(self, "_lock_start_at_zero", False):
+            vs = 0.0
+            ve = self._window_m
+        else:
+            half = self._window_m / 2
+            vs = self._current_distance - half
+            ve = self._current_distance + half
 
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(18, 18, 22, 200))

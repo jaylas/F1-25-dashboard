@@ -14,8 +14,16 @@ from models import LAP_AVERAGING_BUCKET_METRES
 from widgets.graph import InputGraphWidget
 
 
+LAP_DEBUG = True
+
+
 class ReviewWindow(QWidget):
     SINGLE_LAP_BUCKET_METRES = 2.0
+
+    @staticmethod
+    def _lap_dbg(message: str) -> None:
+        if LAP_DEBUG:
+            print(f"[LAP-DEBUG][Review] {message}")
 
     def __init__(
         self,
@@ -212,6 +220,10 @@ class ReviewWindow(QWidget):
 
         self.scroll_area.setWidget(self.graphs_container)
 
+        for graph in (self.brake_graph, self.throttle_graph, self.gear_graph):
+            graph._lock_start_at_zero = True
+            graph.MAX_WINDOW = float("inf")
+
         # Capture wheel events before QScrollArea consumes them.
         for graph in (self.brake_graph, self.throttle_graph, self.gear_graph):
             graph.installEventFilter(self)
@@ -278,6 +290,10 @@ class ReviewWindow(QWidget):
     def update_laps(self, historical_laps: list[dict]) -> None:
         self.historical_laps = historical_laps
         idx = self.lap_combo.currentIndex()
+        self._lap_dbg(
+            f"update_laps called: incoming={len(self.historical_laps)}, old_combo_idx={idx}, "
+            f"old_combo_count={self.lap_combo.count()}"
+        )
         self.lap_combo.blockSignals(True)
         self.lap_combo.clear()
 
@@ -294,6 +310,11 @@ class ReviewWindow(QWidget):
         else:
             self.lap_combo.setCurrentIndex(0)
 
+        self._lap_dbg(
+            f"update_laps rebuilt combo_count={self.lap_combo.count()}, "
+            f"new_idx={self.lap_combo.currentIndex()}, current_text='{self.lap_combo.currentText()}'"
+        )
+
         self.lap_combo.blockSignals(False)
         self._on_lap_selected(self.lap_combo.currentIndex())
 
@@ -304,9 +325,11 @@ class ReviewWindow(QWidget):
 
     def _on_lap_selected(self, index: int) -> None:
         if index < 0 or not self.historical_laps:
+            self._lap_dbg(f"on_lap_selected ignored: index={index}, laps={len(self.historical_laps)}")
             return
 
         text = self.lap_combo.itemText(index)
+        self._lap_dbg(f"on_lap_selected index={index}, text='{text}', laps={len(self.historical_laps)}")
 
         self.brake_graph.clear_historical()
         self.throttle_graph.clear_historical()
@@ -366,6 +389,10 @@ class ReviewWindow(QWidget):
         self.brake_graph._live_samples = b_data
         self.throttle_graph._live_samples = t_data
         self.gear_graph._live_samples = g_data
+
+        self._lap_dbg(
+            f"selected data sizes: brake={len(b_data)}, throttle={len(t_data)}, gear={len(g_data)}"
+        )
 
         self._fit_all_graphs_to_span([b_data, t_data, g_data])
 

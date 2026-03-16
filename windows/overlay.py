@@ -24,9 +24,15 @@ _RESIZE_MARGIN = 8
 TRACK_REF_ALIASES = {
     "lusail": "losail",
 }
+LAP_DEBUG = True
 
 
 class OverlayWindow(QWidget):
+    @staticmethod
+    def _lap_dbg(message: str) -> None:
+        if LAP_DEBUG:
+            print(f"[LAP-DEBUG][Overlay] {message}")
+
     @staticmethod
     def _normalize_gear_value(raw: float) -> float:
         # Accept common gear encodings from external telemetry exports.
@@ -86,6 +92,7 @@ class OverlayWindow(QWidget):
         self.historical_laps: list[dict[str, list[tuple[float, float]]]] = []
         self._current_lap: int = -1
         self._current_distance: float = 0.0
+        self._wrap_archive_latched: bool = False
 
         self.ui_timer = QTimer(self)
         self.ui_timer.setInterval(16)
@@ -310,6 +317,7 @@ class OverlayWindow(QWidget):
         return super().eventFilter(watched, event)
 
     def _open_review_window(self) -> None:
+        self._lap_dbg(f"Open review requested, historical_laps={len(self.historical_laps)}")
         if not hasattr(self, "review_window") or self.review_window is None:
             self.review_window = ReviewWindow(
                 self.historical_laps,
@@ -317,6 +325,7 @@ class OverlayWindow(QWidget):
                 self.throttle_graph._ref_samples,
                 self.gear_graph._ref_samples,
             )
+            self._lap_dbg("Created new ReviewWindow instance")
         else:
             self.review_window.update_references(
                 self.brake_graph._ref_samples,
@@ -324,6 +333,12 @@ class OverlayWindow(QWidget):
                 self.gear_graph._ref_samples,
             )
             self.review_window.update_laps(self.historical_laps)
+            self._lap_dbg("Updated existing ReviewWindow references and laps")
+        if hasattr(self.review_window, "lap_combo"):
+            self._lap_dbg(
+                f"Review combo items={self.review_window.lap_combo.count()}, "
+                f"current_index={self.review_window.lap_combo.currentIndex()}"
+            )
         self.review_window.show()
         self.review_window.raise_()
 
@@ -340,19 +355,65 @@ class OverlayWindow(QWidget):
         self._try_load_track_ref(track_name)
 
     def on_telemetry(self, frame: TelemetryFrame) -> None:
-        dist_drop = self._current_distance - frame.lap_distance
-        if dist_drop > 1000.0:
-            if len(self.brake_graph._live_samples) > 50:
-                self.historical_laps.append(
-                    {
-                        "brake": list(self.brake_graph._live_samples),
-                        "throttle": list(self.throttle_graph._live_samples),
-                        "gear": list(self.gear_graph._live_samples),
-                    }
+        prev_lap = self._current_lap
+        prev_dist = self._current_distance
+        dist_drop = prev_dist - frame.lap_distance
+        lap_changed = prev_lap >= 0 and frame.lap_number != prev_lap
+        if frame.lap_distance > 300.0:
+            self._wrap_archive_latched = False
+        # Handle both normal lap number increment and wrapped lap distance packets.
+        wrapped_distance = (
+            dist_drop > 200.0
+            and frame.lap_distance < 200.0
+            and not self._wrap_archive_latched
+        )
+
+        if lap_changed or wrapped_distance:
+            self._lap_dbg(
+                "boundary detected: "
+                f"prev_lap={prev_lap}, frame_lap={frame.lap_number}, "
+                f"prev_dist={prev_dist:.1f}, new_dist={frame.lap_distance:.1f}, "
+                f"drop={dist_drop:.1f}, lap_changed={lap_changed}, wrapped={wrapped_distance}, "
+                f"live_samples={len(self.brake_graph._live_samples)}, archived={len(self.historical_laps)}"
+            )
+
+        if (lap_changed or wrapped_distance) and len(self.brake_graph._live_samples) > 50:
+            b_live = list(self.brake_graph._live_samples)
+            t_live = list(self.throttle_graph._live_samples)
+            g_live = list(self.gear_graph._live_samples)
+            self.historical_laps.append(
+                {
+                    "brake": b_live,
+                    "throttle": t_live,
+                    "gear": g_live,
+                }
+            )
+            if wrapped_distance:
+                self._wrap_archive_latched = True
+            self.status_label.setText(
+                f"Archived lap {len(self.historical_laps)} (Live tracking lap {frame.lap_number})"
+            )
+            b_first = b_live[0][0] if b_live else -1.0
+            b_last = b_live[-1][0] if b_live else -1.0
+            self._lap_dbg(
+                f"archived lap_idx={len(self.historical_laps) - 1}, "
+                f"brake_samples={len(b_live)}, dist_first={b_first:.1f}, dist_last={b_last:.1f}, "
+                f"latch={self._wrap_archive_latched}"
+            )
+            if wrapped_distance and not lap_changed:
+                self.brake_graph._live_samples.clear()
+                self.throttle_graph._live_samples.clear()
+                self.gear_graph._live_samples.clear()
+                self._lap_dbg("cleared live samples after wrapped archive (lap counter unchanged)")
+            if hasattr(self, "review_window") and self.review_window is not None:
+                self.review_window.update_laps(self.historical_laps)
+                self._lap_dbg(
+                    f"review_window refreshed after archive, combo_items={self.review_window.lap_combo.count()}"
                 )
-                self.status_label.setText(
-                    f"Archived lap {len(self.historical_laps)} (Live tracking lap {frame.lap_number})"
-                )
+        elif lap_changed or wrapped_distance:
+            self._lap_dbg(
+                f"archive skipped due to low sample count: {len(self.brake_graph._live_samples)}"
+            )
 
         self._current_lap = frame.lap_number
         self._current_distance = frame.lap_distance
