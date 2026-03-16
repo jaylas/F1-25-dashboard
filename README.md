@@ -46,3 +46,16 @@ In F1 25, enable UDP telemetry and use port 20777.
 
 - The app binds UDP on all interfaces and updates connection status in the UI.
 - If refs/<track>.json exists for the detected track, it is loaded automatically.
+
+### Simulate UDP
+
+- Standard (Bahrain)
+```python3 simulate_udp.py```
+- Eine andere Strecke wählen
+```python3 simulate_udp.py --ref refs/melbourne.json```
+- Simulation beschleunigen (z.B. 10x Speed für schnelles Testen)
+```python3 simulate_udp.py --speed 10.0```
+- Mehr oder weniger Zufall/Abweichung (Standard ist 0.02)
+```python3 simulate_udp.py --noise 0.05```
+- Automatisch mehrere Runden Simulieren
+```python3 simulate_udp.py --laps 3```

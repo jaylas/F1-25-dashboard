@@ -237,11 +237,17 @@ class OverlayWindow(QWidget):
 
         btn_minus = QPushButton("< -1m")
         btn_minus.setFixedWidth(60)
+        btn_minus.setAutoRepeat(True)
+        btn_minus.setAutoRepeatDelay(400)
+        btn_minus.setAutoRepeatInterval(50)
         btn_minus.clicked.connect(lambda: self._adjust_offset(-1))
         offset_row.addWidget(btn_minus)
 
         btn_plus = QPushButton("+1m >")
         btn_plus.setFixedWidth(60)
+        btn_plus.setAutoRepeat(True)
+        btn_plus.setAutoRepeatDelay(400)
+        btn_plus.setAutoRepeatInterval(50)
         btn_plus.clicked.connect(lambda: self._adjust_offset(1))
         offset_row.addWidget(btn_plus)
 
@@ -318,6 +324,7 @@ class OverlayWindow(QWidget):
 
     def _open_review_window(self) -> None:
         self._lap_dbg(f"Open review requested, historical_laps={len(self.historical_laps)}")
+        current_offset = self.brake_graph._ref_offset
         if not hasattr(self, "review_window") or self.review_window is None:
             self.review_window = ReviewWindow(
                 self.historical_laps,
@@ -325,15 +332,22 @@ class OverlayWindow(QWidget):
                 self.throttle_graph._ref_samples,
                 self.gear_graph._ref_samples,
             )
-            self._lap_dbg("Created new ReviewWindow instance")
+            self.review_window.update_references(
+                self.brake_graph._ref_samples,
+                self.throttle_graph._ref_samples,
+                self.gear_graph._ref_samples,
+                offset=current_offset
+            )
+            self._lap_dbg(f"Created new ReviewWindow instance with offset {current_offset}")
         else:
             self.review_window.update_references(
                 self.brake_graph._ref_samples,
                 self.throttle_graph._ref_samples,
                 self.gear_graph._ref_samples,
+                offset=current_offset
             )
             self.review_window.update_laps(self.historical_laps)
-            self._lap_dbg("Updated existing ReviewWindow references and laps")
+            self._lap_dbg(f"Updated existing ReviewWindow references and laps with offset {current_offset}")
         if hasattr(self.review_window, "lap_combo"):
             self._lap_dbg(
                 f"Review combo items={self.review_window.lap_combo.count()}, "
