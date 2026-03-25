@@ -1,3 +1,14 @@
+to get the ref files:
+-> go to racenet.com/f1_25-> log in
+-> select the track and compare yourself to the best lap
+-> press F12 for developer tools
+-> go to network tab
+-> filter by XHR and click through the json GET requests
+-> find the right request that contains the data
+-> copy the whole json response
+-> save it as a json file in the refs folder
+-> make sure the file name is the same as the track name
+
 refs/bahrain.json
 refs/monaco.json
 refs/melbourne.json
