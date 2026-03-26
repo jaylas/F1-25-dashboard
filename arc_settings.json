@@ -1,0 +1,16 @@
+{
+    "bezier_w": 1656,
+    "bezier_h": 533,
+    "ctrl_x": 437,
+    "ctrl_y_extra": 65,
+    "base_thick": 89,
+    "win_w": 1727,
+    "win_h": 700,
+    "base_color": [
+        25,
+        28,
+        35,
+        230
+    ],
+    "round_caps": true
+}

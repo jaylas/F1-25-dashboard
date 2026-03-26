@@ -31,6 +31,5 @@ ENV/
 .vscode/
 
 # Project Specific
-arc_settings.json
-arc_config.json
+
 test_pyqt_arc/
