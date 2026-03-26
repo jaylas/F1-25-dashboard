@@ -17,7 +17,11 @@ from PyQt6.QtWidgets import (
 from models import REFS_DIR, TelemetryFrame, UDP_PORT
 from telemetry import TelemetryListener
 from widgets.graph import InputGraphWidget
+from widgets.arc import ArcOverlayWidget, ArcSettingsWindow
+from widgets.arc.modules import GraphModule
 from windows.review import ReviewWindow
+
+ARC_CONFIG_FILE = "arc_config.json"
 
 
 _RESIZE_MARGIN = 8
@@ -93,6 +97,11 @@ class OverlayWindow(QWidget):
         self._current_lap: int = -1
         self._current_distance: float = 0.0
         self._wrap_archive_latched: bool = False
+
+        # Arc overlay
+        self._arc_overlay: ArcOverlayWidget | None = None
+        self._arc_settings: ArcSettingsWindow | None = None
+        self._arc_active: bool = False
 
         self.ui_timer = QTimer(self)
         self.ui_timer.setInterval(16)
@@ -181,6 +190,14 @@ class OverlayWindow(QWidget):
         self.toggle_gear_btn = QPushButton("Toggle Gear")
         self.toggle_gear_btn.clicked.connect(self._toggle_gear_graph)
         toggles_layout.addWidget(self.toggle_gear_btn)
+
+        self.toggle_arc_btn = QPushButton("Arc HUD")
+        self.toggle_arc_btn.clicked.connect(self._toggle_arc_mode)
+        toggles_layout.addWidget(self.toggle_arc_btn)
+
+        self.arc_settings_btn = QPushButton("Arc Settings")
+        self.arc_settings_btn.clicked.connect(self._open_arc_settings)
+        toggles_layout.addWidget(self.arc_settings_btn)
 
         mid_row.addWidget(self.toggles_widget)
         root.addWidget(self.mid_widget)
@@ -446,6 +463,10 @@ class OverlayWindow(QWidget):
         self.throttle_graph.window_metres = target_window
         self.gear_graph.window_metres = target_window
 
+        # Feed arc overlay
+        if self._arc_active and self._arc_overlay is not None:
+            self._update_arc_data()
+
         if self.recording:
             self._record_sample(frame)
 
@@ -698,8 +719,87 @@ class OverlayWindow(QWidget):
             self._resize_geom = None
             event.accept()
 
+    # ── Arc Overlay ─────────────────────────────────────────────────
+    def _toggle_arc_mode(self) -> None:
+        self._arc_active = not self._arc_active
+        if self._arc_active:
+            if self._arc_overlay is None:
+                self._arc_overlay = ArcOverlayWidget()
+                import os
+                if os.path.exists(ARC_CONFIG_FILE):
+                    self._arc_overlay.load_config(ARC_CONFIG_FILE)
+                else:
+                    self._create_default_arc_modules()
+                    self._arc_overlay.rebuild()
+            self._arc_overlay.show()
+            self.toggle_arc_btn.setText("Arc HUD (AN)")
+        else:
+            if self._arc_overlay is not None:
+                self._arc_overlay.hide()
+            self.toggle_arc_btn.setText("Arc HUD")
+
+    def _create_default_arc_modules(self) -> None:
+        """Erstellt Standard-Module für Throttle, Brake, Gear."""
+        ov = self._arc_overlay
+        if ov is None:
+            return
+        ov.modules.clear()
+        ov.modules.append(GraphModule(
+            name="Brake", t_start=0.03, t_end=0.35,
+            side="outside", height=0.9,
+            color=(255, 50, 50, 220), fill_color=(255, 50, 50, 60),
+            data_key="brake"
+        ))
+        ov.modules.append(GraphModule(
+            name="Throttle", t_start=0.03, t_end=0.35,
+            side="outside", height=0.9,
+            color=(0, 255, 100, 220), fill_color=(0, 255, 100, 60),
+            data_key="throttle"
+        ))
+        ov.modules.append(GraphModule(
+            name="Gear", t_start=0.65, t_end=0.97,
+            side="outside", height=0.9,
+            color=(255, 210, 60, 220), fill_color=(255, 210, 60, 60),
+            data_key="gear"
+        ))
+
+    def _update_arc_data(self) -> None:
+        """Schickt die letzten Live-Samples an die Arc-Module."""
+        ov = self._arc_overlay
+        if ov is None:
+            return
+        N = 100
+        for mod in ov.modules:
+            if not isinstance(mod, GraphModule):
+                continue
+            if mod.data_key == "throttle":
+                samples = self.throttle_graph._live_samples[-N:]
+                mod.set_values([v for _, v in samples])
+            elif mod.data_key == "brake":
+                samples = self.brake_graph._live_samples[-N:]
+                mod.set_values([v for _, v in samples])
+            elif mod.data_key == "gear":
+                samples = self.gear_graph._live_samples[-N:]
+                mod.set_values([max(0, (v - 1) / 7.0) for _, v in samples])
+        ov.update()
+
+    def _open_arc_settings(self) -> None:
+        if self._arc_overlay is None:
+            # Erstelle Arc-Overlay falls noch nicht da
+            self._arc_overlay = ArcOverlayWidget()
+            self._create_default_arc_modules()
+            self._arc_overlay.rebuild()
+        if self._arc_settings is None:
+            self._arc_settings = ArcSettingsWindow(self._arc_overlay)
+        self._arc_settings.show()
+        self._arc_settings.raise_()
+
     def closeEvent(self, event) -> None:  # noqa: N802
         self.telemetry.stop()
+        if self._arc_overlay is not None:
+            self._arc_overlay.close()
+        if self._arc_settings is not None:
+            self._arc_settings.close()
         app = QApplication.instance()
         if app is not None:
             app.quit()
