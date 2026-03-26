@@ -2,14 +2,14 @@ import sys
 
 from PyQt6.QtWidgets import QApplication
 
-from windows.overlay import OverlayWindow
+from ui.windows.launcher import LauncherWindow
 
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(False)
-    overlay = OverlayWindow()
-    overlay.show()
+    app.setQuitOnLastWindowClosed(True)
+    launcher = LauncherWindow()
+    launcher.show()
     return app.exec()
 
 

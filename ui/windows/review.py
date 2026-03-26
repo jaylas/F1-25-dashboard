@@ -11,8 +11,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from models import LAP_AVERAGING_BUCKET_METRES
-from widgets.graph import InputGraphWidget
+from core.models import LAP_AVERAGING_BUCKET_METRES
+from ui.widgets.graph import InputGraphWidget
 
 
 LAP_DEBUG = True

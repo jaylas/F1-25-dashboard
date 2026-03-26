@@ -7,8 +7,8 @@ from PyQt6.QtCore import Qt, QPointF
 from PyQt6.QtGui import QPainter, QColor, QPen, QPainterPath, QPixmap
 from PyQt6.QtWidgets import QWidget
 
-from widgets.arc.geometry import point_at, build_strip
-from widgets.arc.modules import ArcModule
+from ui.widgets.arc.geometry import point_at, build_strip, PathCache
+from ui.widgets.arc.modules import ArcModule, GraphModule
 
 
 class ArcOverlayWidget(QWidget):
@@ -31,11 +31,12 @@ class ArcOverlayWidget(QWidget):
         self.ctrl_x: int = 200
         self.ctrl_y_extra: int = 80
         self.base_thick: int = 60
-        self.base_color: QColor = QColor(25, 28, 35, 230)
+        self.base_color: QColor = QColor(25, 28, 35, 255)
         self.round_caps: bool = True
 
         # Module
         self.modules: list[ArcModule] = []
+        self._cached_pc = None
 
         self._drag = None
         self.resize(self.win_w, self.win_h)
@@ -58,8 +59,24 @@ class ArcOverlayWidget(QWidget):
             self.rebuild()
 
     def rebuild(self) -> None:
+        self._cached_pc = None
         self._update_mask()
         self.update()
+
+    # ── Zoom ─────────────────────────────────────────────────────────
+    def _graph_modules(self) -> list[GraphModule]:
+        return [m for m in self.modules if isinstance(m, GraphModule)]
+
+    def wheelEvent(self, event) -> None:
+        delta = event.angleDelta().y()
+        if delta == 0:
+            event.ignore()
+            return
+        factor = 0.9 if delta > 0 else 1.1
+        for gm in self._graph_modules():
+            gm.apply_zoom(factor)
+        self.update()
+        event.accept()
 
     # ── Bézier-Pfad ──────────────────────────────────────────────────
     def base_path(self) -> QPainterPath:
@@ -78,6 +95,11 @@ class ArcOverlayWidget(QWidget):
         path.cubicTo(c1, c2, QPointF(ex, by))
         return path
 
+    def cached_path(self) -> PathCache:
+        if self._cached_pc is None:
+            self._cached_pc = PathCache(self.base_path())
+        return self._cached_pc
+
     # ── Maske ────────────────────────────────────────────────────────
     def _update_mask(self) -> None:
         pm = QPixmap(self.size())
@@ -85,6 +107,7 @@ class ArcOverlayWidget(QWidget):
         p = QPainter(pm)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         bp = self.base_path()
+        pc = self.cached_path()
 
         # Basislinie
         pen = QPen(Qt.GlobalColor.white, self.base_thick)
@@ -98,7 +121,7 @@ class ArcOverlayWidget(QWidget):
         ht = self.base_thick / 2
         for mod in self.modules:
             if mod.visible:
-                mp = mod.mask_path(bp, ht)
+                mp = mod.mask_path(pc, ht)
                 if mp:
                     p.drawPath(mp)
         p.end()
@@ -109,6 +132,7 @@ class ArcOverlayWidget(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         bp = self.base_path()
+        pc = self.cached_path()
         ht = self.base_thick / 2
 
         # Basisbalken
@@ -123,14 +147,14 @@ class ArcOverlayWidget(QWidget):
             edge = QPainterPath()
             for i in range(101):
                 t = i / 100.0
-                pt = point_at(bp, t, off)
+                pt = point_at(pc, t, off)
                 edge.moveTo(pt) if i == 0 else edge.lineTo(pt)
             p.drawPath(edge)
 
         # Module zeichnen
         for mod in self.modules:
             if mod.visible:
-                mod.paint(p, bp, ht)
+                mod.paint(p, pc, ht)
 
         p.end()
 
@@ -174,6 +198,7 @@ class ArcOverlayWidget(QWidget):
                 setattr(self, k, arc[k])
         if "base_color" in arc:
             self.base_color = QColor(*arc["base_color"])
+            self.base_color.setAlpha(255) # Erzwinge 100% Opaque-Hintergrund für den neuen Global-Slider
         self.modules = [ArcModule.from_dict(d) for d in data.get("modules", [])]
         self.resize(self.win_w, self.win_h)
         self.rebuild()

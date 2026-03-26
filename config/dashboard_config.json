@@ -1,0 +1,36 @@
+{
+  "chk_throttle": true,
+  "chk_gear": true,
+  "opacity_graph": 239,
+  "opacity_arc": 235,
+  "opacity_radar": 198,
+  "radar_radius": 12,
+  "radar_autohide": true,
+  "open_graph": true,
+  "open_arc": true,
+  "open_radar": true,
+  "geom_launcher": [
+    -1517,
+    360,
+    356,
+    653
+  ],
+  "geom_graph": [
+    2019,
+    20,
+    520,
+    320
+  ],
+  "geom_arc": [
+    141,
+    775,
+    2249,
+    731
+  ],
+  "geom_radar": [
+    716,
+    351,
+    300,
+    300
+  ]
+}

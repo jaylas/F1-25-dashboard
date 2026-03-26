@@ -5,6 +5,11 @@ import time
 import random
 import argparse
 import os
+import sys
+from pathlib import Path
+
+# Add root directory to python path for module imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # F1 UDP Constants (matching models.py)
 PACKET_SESSION = 1
@@ -46,7 +51,7 @@ def pack_car_telemetry(throttle, brake, gear, steering, player_car_index=0):
     packet_body = bytearray(num_cars * CAR_TELEMETRY_DATA_SIZE)
     
     base = player_car_index * CAR_TELEMETRY_DATA_SIZE
-    # Offsets from models.py:
+    # Offsets from core.models.py:
     # CAR_TELEMETRY_THROTTLE_OFFSET = 2
     # CAR_TELEMETRY_BRAKE_OFFSET = 10
     # CAR_TELEMETRY_GEAR_OFFSET = 15
@@ -68,7 +73,7 @@ def pack_lap_data(lap_distance, lap_number, player_car_index=0):
     packet_body = bytearray(num_cars * LAP_DATA_SIZE)
     
     base = player_car_index * LAP_DATA_SIZE
-    # Offsets from models.py:
+    # Offsets from core.models.py:
     # DEFAULT_LAP_DISTANCE_OFFSET = 20
     # CURRENT_LAP_NUM_OFFSET = 39
     struct.pack_into("<f", packet_body, base + 20, lap_distance)
@@ -106,7 +111,7 @@ def main():
     # Map filename to track ID if possible
     track_id = -1
     clean_ref_name = os.path.basename(args.ref).lower().replace(".json", "")
-    from models import TRACK_NAMES, REFS_DIR
+    from core.models import TRACK_NAMES, REFS_DIR
     
     # Try to find track ID by matching filename to TRACK_NAMES
     for tid, name in TRACK_NAMES.items():

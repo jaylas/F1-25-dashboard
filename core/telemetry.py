@@ -5,7 +5,7 @@ import time
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from models import (
+from core.models import (
     CAR_TELEMETRY_BRAKE_OFFSET,
     CAR_TELEMETRY_DATA_SIZE,
     CAR_TELEMETRY_GEAR_FALLBACK_OFFSETS,
@@ -16,6 +16,8 @@ from models import (
     HEADER_FORMAT,
     HEADER_SIZE,
     LAP_DATA_SIZE,
+    PACKET_MOTION_DATA,
+    MOTION_DATA_SIZE,
     PACKET_CAR_TELEMETRY,
     PACKET_LAP_DATA,
     PACKET_SESSION,
@@ -140,6 +142,10 @@ class TelemetryListener(QObject):
             lap_distance=self._latest_frame.lap_distance,
             lap_number=self._latest_frame.lap_number,
             session_time=session_time,
+            player_pos=self._latest_frame.player_pos,
+            player_forward=self._latest_frame.player_forward,
+            player_right=self._latest_frame.player_right,
+            opponents=self._latest_frame.opponents,
         )
 
         if packet_id == PACKET_CAR_TELEMETRY:
@@ -150,6 +156,17 @@ class TelemetryListener(QObject):
                 frame.throttle = t
             if g is not None:
                 frame.gear = g
+
+        elif packet_id == PACKET_MOTION_DATA:
+            pos, fwd, right, opps = self._extract_motion_data(data, player_car_index)
+            if pos is not None:
+                frame.player_pos = pos
+            if fwd is not None:
+                frame.player_forward = fwd
+            if right is not None:
+                frame.player_right = right
+            if opps is not None:
+                frame.opponents = opps
 
         elif packet_id == PACKET_LAP_DATA:
             if not self._lap_offset_found and player_car_index == 0:
@@ -180,6 +197,39 @@ class TelemetryListener(QObject):
             name = TRACK_NAMES.get(track_id, f"unknown_{track_id}")
             print(f"[TRACK] Detected track_id={track_id} -> {name}")
             self.track_changed.emit(track_id, name)
+
+    @staticmethod
+    def _extract_motion_data(data: bytes, p_idx: int) -> tuple[tuple[float, float, float] | None, tuple[float, float, float] | None, tuple[float, float, float] | None, list[tuple[float, float, float]] | None]:
+        if len(data) < HEADER_SIZE + (22 * MOTION_DATA_SIZE):
+            return None, None, None, None
+        
+        pos = None
+        fwd = None
+        right = None
+        opps = []
+        
+        for i in range(22):
+            base = HEADER_SIZE + i * MOTION_DATA_SIZE
+            try:
+                x, y, z = struct.unpack_from("<fff", data, base)
+            except struct.error:
+                continue
+                
+            if i == p_idx:
+                pos = (x, y, z)
+                try:
+                    # Offsets: pos=0, vel=12, fwd=24, right=30
+                    fx, fy, fz, rx, ry, rz = struct.unpack_from("<hhhhhh", data, base + 24)
+                    fwd = (fx / 32767.0, fy / 32767.0, fz / 32767.0)
+                    right = (rx / 32767.0, ry / 32767.0, rz / 32767.0)
+                except struct.error:
+                    pass
+            else:
+                # Exclude completely inactive cars
+                if abs(x) > 0.001 or abs(y) > 0.001 or abs(z) > 0.001:
+                    opps.append((x, y, z))
+                    
+        return pos, fwd, right, opps
 
     @staticmethod
     def _extract_inputs(data: bytes, player_car_index: int) -> tuple[float | None, float | None, int | None]:

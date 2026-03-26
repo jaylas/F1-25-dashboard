@@ -1,0 +1,88 @@
+{
+  "arc": {
+    "win_w": 2249,
+    "win_h": 731,
+    "bezier_w": 1601,
+    "bezier_h": 549,
+    "ctrl_x": 348,
+    "ctrl_y_extra": 70,
+    "base_thick": 89,
+    "round_caps": true,
+    "base_color": [
+      25,
+      28,
+      35,
+      255
+    ]
+  },
+  "modules": [
+    {
+      "type": "GraphModule",
+      "name": "Brake",
+      "t_start": 0.03,
+      "t_end": 0.5,
+      "side": "inside",
+      "height": 0.9,
+      "color": [
+        255,
+        50,
+        50,
+        220
+      ],
+      "visible": true,
+      "data_key": "brake",
+      "fill_color": [
+        255,
+        50,
+        50,
+        60
+      ],
+      "value_mode": "percent"
+    },
+    {
+      "type": "GraphModule",
+      "name": "Throttle",
+      "t_start": 0.03,
+      "t_end": 0.5,
+      "side": "outside",
+      "height": 0.9,
+      "color": [
+        0,
+        255,
+        100,
+        220
+      ],
+      "visible": true,
+      "data_key": "throttle",
+      "fill_color": [
+        0,
+        255,
+        100,
+        60
+      ],
+      "value_mode": "percent"
+    },
+    {
+      "type": "BrakeIndicatorModule",
+      "name": "Bremspunkt",
+      "t_start": 0.5,
+      "t_end": 0.97,
+      "side": "center",
+      "height": 1.9,
+      "color": [
+        255,
+        255,
+        255,
+        200
+      ],
+      "visible": true,
+      "dist_threshold": 200.0,
+      "fill_color": [
+        255,
+        50,
+        50,
+        200
+      ]
+    }
+  ]
+}

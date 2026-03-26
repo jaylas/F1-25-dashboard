@@ -157,7 +157,7 @@ class InputGraphWidget(QWidget):
             ve = self._current_distance + half
 
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(18, 18, 22, 200))
+        p.setBrush(QColor(18, 18, 22, 255))
         p.drawRoundedRect(QRectF(gx - 2, gy - 2, gw + 4, gh + 4), 6, 6)
 
         p.setClipRect(QRectF(gx, gy, gw, gh))

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import struct
 
 # F1 UDP constants
+PACKET_MOTION_DATA = 0
 PACKET_SESSION = 1
 PACKET_LAP_DATA = 2
 PACKET_CAR_TELEMETRY = 6
@@ -11,6 +12,7 @@ HEADER_FORMAT = "<HBBBBBQfIIBB"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)  # 29 bytes
 
 # Per-car struct sizes (from actual F1 25 packets)
+MOTION_DATA_SIZE = 60
 LAP_DATA_SIZE = 57
 CAR_TELEMETRY_DATA_SIZE = 60
 
@@ -78,3 +80,12 @@ class TelemetryFrame:
     lap_distance: float = 0.0
     lap_number: int = 0
     session_time: float = 0.0
+    # Radar Data
+    player_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    player_forward: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    player_right: tuple[float, float, float] = (1.0, 0.0, 0.0)
+    opponents: list[tuple[float, float, float]] = None
+
+    def __post_init__(self):
+        if self.opponents is None:
+            self.opponents = []

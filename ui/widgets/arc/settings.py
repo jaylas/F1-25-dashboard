@@ -11,12 +11,12 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QColor
 
-from widgets.arc.arc_overlay import ArcOverlayWidget
-from widgets.arc.modules import ArcModule, TextModule, GraphModule, BarModule
+from ui.widgets.arc.arc_overlay import ArcOverlayWidget
+from ui.widgets.arc.modules import ArcModule, TextModule, GraphModule, BarModule, RadarModule, BrakeIndicatorModule
 
 
 class ArcSettingsWindow(QWidget):
-    CONFIG_FILE = "arc_config.json"
+    CONFIG_FILE = "config/arc_config.json"
 
     def __init__(self, overlay: ArcOverlayWidget):
         super().__init__()
@@ -76,7 +76,9 @@ class ArcSettingsWindow(QWidget):
         for text, slot in [("+ Text", self._add_text),
                            ("+ Graph", self._add_graph),
                            ("+ Bar", self._add_bar),
-                           ("Entfernen", self._remove_module)]:
+                           ("+ Radar", self._add_radar),
+                           ("+ Brems-Balken", self._add_brake),
+                           ("X", self._remove_module)]:
             b = QPushButton(text)
             b.clicked.connect(slot)
             btn_row.addWidget(b)
@@ -97,12 +99,25 @@ class ArcSettingsWindow(QWidget):
         self.mod_t_start = QDoubleSpinBox()
         self.mod_t_start.setRange(0.0, 1.0); self.mod_t_start.setSingleStep(0.01); self.mod_t_start.setDecimals(2)
         self.mod_t_start.valueChanged.connect(self._push_module)
-        row1.addWidget(self.mod_t_start)
+        btn_ts_m = QPushButton("<"); btn_ts_m.setFixedWidth(22)
+        btn_ts_m.setAutoRepeat(True); btn_ts_m.setAutoRepeatDelay(400); btn_ts_m.setAutoRepeatInterval(50)
+        btn_ts_m.clicked.connect(lambda: self.mod_t_start.stepDown())
+        btn_ts_p = QPushButton(">"); btn_ts_p.setFixedWidth(22)
+        btn_ts_p.setAutoRepeat(True); btn_ts_p.setAutoRepeatDelay(400); btn_ts_p.setAutoRepeatInterval(50)
+        btn_ts_p.clicked.connect(lambda: self.mod_t_start.stepUp())
+        row1.addWidget(btn_ts_m); row1.addWidget(self.mod_t_start); row1.addWidget(btn_ts_p)
+
         row1.addWidget(QLabel("Ende %:"))
         self.mod_t_end = QDoubleSpinBox()
         self.mod_t_end.setRange(0.0, 1.0); self.mod_t_end.setSingleStep(0.01); self.mod_t_end.setDecimals(2)
         self.mod_t_end.valueChanged.connect(self._push_module)
-        row1.addWidget(self.mod_t_end)
+        btn_te_m = QPushButton("<"); btn_te_m.setFixedWidth(22)
+        btn_te_m.setAutoRepeat(True); btn_te_m.setAutoRepeatDelay(400); btn_te_m.setAutoRepeatInterval(50)
+        btn_te_m.clicked.connect(lambda: self.mod_t_end.stepDown())
+        btn_te_p = QPushButton(">"); btn_te_p.setFixedWidth(22)
+        btn_te_p.setAutoRepeat(True); btn_te_p.setAutoRepeatDelay(400); btn_te_p.setAutoRepeatInterval(50)
+        btn_te_p.clicked.connect(lambda: self.mod_t_end.stepUp())
+        row1.addWidget(btn_te_m); row1.addWidget(self.mod_t_end); row1.addWidget(btn_te_p)
         dl.addLayout(row1)
 
         row2 = QHBoxLayout()
@@ -115,7 +130,13 @@ class ArcSettingsWindow(QWidget):
         self.mod_height = QDoubleSpinBox()
         self.mod_height.setRange(0.1, 3.0); self.mod_height.setSingleStep(0.1); self.mod_height.setDecimals(1)
         self.mod_height.valueChanged.connect(self._push_module)
-        row2.addWidget(self.mod_height)
+        btn_h_m = QPushButton("<"); btn_h_m.setFixedWidth(22)
+        btn_h_m.setAutoRepeat(True); btn_h_m.setAutoRepeatDelay(400); btn_h_m.setAutoRepeatInterval(50)
+        btn_h_m.clicked.connect(lambda: self.mod_height.stepDown())
+        btn_h_p = QPushButton(">"); btn_h_p.setFixedWidth(22)
+        btn_h_p.setAutoRepeat(True); btn_h_p.setAutoRepeatDelay(400); btn_h_p.setAutoRepeatInterval(50)
+        btn_h_p.clicked.connect(lambda: self.mod_height.stepUp())
+        row2.addWidget(btn_h_m); row2.addWidget(self.mod_height); row2.addWidget(btn_h_p)
         dl.addLayout(row2)
 
         # Typ-spezifische Felder
@@ -142,10 +163,30 @@ class ArcSettingsWindow(QWidget):
         row4.addWidget(self.mod_datakey)
         dl.addLayout(row4)
 
+        row5 = QHBoxLayout()
+        row5.addWidget(QLabel("Radius:"))
+        self.mod_radius = QDoubleSpinBox()
+        self.mod_radius.setRange(5.0, 200.0); self.mod_radius.setSingleStep(5.0); self.mod_radius.setDecimals(1)
+        self.mod_radius.valueChanged.connect(self._push_module)
+        row5.addWidget(self.mod_radius)
+        
         self.mod_visible = QCheckBox("Sichtbar")
         self.mod_visible.setChecked(True)
         self.mod_visible.toggled.connect(self._push_module)
-        dl.addWidget(self.mod_visible)
+        row5.addWidget(self.mod_visible)
+        dl.addLayout(row5)
+
+        row6 = QHBoxLayout()
+        row6.addWidget(QLabel("Dist/Brems-Limit:"))
+        self.mod_dist_threshold = QDoubleSpinBox()
+        self.mod_dist_threshold.setRange(1.0, 3000.0); self.mod_dist_threshold.setSingleStep(5.0); self.mod_dist_threshold.setDecimals(1)
+        self.mod_dist_threshold.valueChanged.connect(self._push_module)
+        row6.addWidget(self.mod_dist_threshold)
+        
+        self.btn_mod_color = QPushButton("Modul-Farbe …")
+        self.btn_mod_color.clicked.connect(self._pick_mod_color)
+        row6.addWidget(self.btn_mod_color)
+        dl.addLayout(row6)
 
         self.detail_frame.setLayout(dl)
         l4.addWidget(self.detail_frame)
@@ -154,19 +195,6 @@ class ArcSettingsWindow(QWidget):
         g4.setLayout(l4)
         root.addWidget(g4)
 
-        # ── Speichern/Laden ───────────────────────────────────────────
-        save_row = QHBoxLayout()
-        btn_save = QPushButton("💾 Speichern")
-        btn_save.setMinimumHeight(36)
-        btn_save.setStyleSheet("font-weight:bold; background:#238636; color:white;")
-        btn_save.clicked.connect(self._save)
-        save_row.addWidget(btn_save)
-
-        btn_load = QPushButton("📂 Laden")
-        btn_load.setMinimumHeight(36)
-        btn_load.clicked.connect(self._load)
-        save_row.addWidget(btn_load)
-        root.addLayout(save_row)
 
         root.addStretch()
         inner.setLayout(root)
@@ -181,11 +209,34 @@ class ArcSettingsWindow(QWidget):
     # ── Slider-Helfer ─────────────────────────────────────────────────
     def _slider(self, layout, label, key, lo, hi, default):
         lbl = QLabel(f"{label}: {default}")
+        row = QHBoxLayout()
+
+        btn_minus = QPushButton("<")
+        btn_minus.setFixedWidth(28)
+        btn_minus.setAutoRepeat(True)
+        btn_minus.setAutoRepeatDelay(400)
+        btn_minus.setAutoRepeatInterval(50)
+
         s = QSlider(Qt.Orientation.Horizontal)
         s.setMinimum(lo); s.setMaximum(hi); s.setValue(default)
         s.valueChanged.connect(lambda v, l=lbl, t=label: l.setText(f"{t}: {v}"))
         s.valueChanged.connect(self._push_arc)
-        layout.addWidget(lbl); layout.addWidget(s)
+
+        btn_plus = QPushButton(">")
+        btn_plus.setFixedWidth(28)
+        btn_plus.setAutoRepeat(True)
+        btn_plus.setAutoRepeatDelay(400)
+        btn_plus.setAutoRepeatInterval(50)
+
+        step = max(1, (hi - lo) // 200)
+        btn_minus.clicked.connect(lambda: s.setValue(s.value() - step))
+        btn_plus.clicked.connect(lambda: s.setValue(s.value() + step))
+
+        layout.addWidget(lbl)
+        row.addWidget(btn_minus)
+        row.addWidget(s)
+        row.addWidget(btn_plus)
+        layout.addLayout(row)
         self.sl[key] = s
 
     def _pick_color(self):
@@ -225,7 +276,7 @@ class ArcSettingsWindow(QWidget):
         for w in (self.mod_name, self.mod_t_start, self.mod_t_end,
                   self.mod_side, self.mod_height, self.mod_text,
                   self.mod_subtext, self.mod_fontsize, self.mod_datakey,
-                  self.mod_visible):
+                  self.mod_visible, self.mod_radius, self.mod_dist_threshold):
             w.blockSignals(True)
 
         self.mod_name.setText(m.name)
@@ -241,12 +292,38 @@ class ArcSettingsWindow(QWidget):
             self.mod_fontsize.setValue(m.font_size)
         if isinstance(m, GraphModule):
             self.mod_datakey.setText(m.data_key)
+        if hasattr(m, "radius_m"):
+            self.mod_radius.setValue(m.radius_m)
+        if hasattr(m, "dist_threshold"):
+            self.mod_dist_threshold.setValue(m.dist_threshold)
+            
+        color = getattr(m, "fill_color", getattr(m, "color", (255,255,255,255)))
+        color_hex = QColor(*color).name()
+        self.btn_mod_color.setStyleSheet(f"background-color: {color_hex}; font-weight: bold; color: {'white' if color[0]<150 else 'black'};")
 
         for w in (self.mod_name, self.mod_t_start, self.mod_t_end,
                   self.mod_side, self.mod_height, self.mod_text,
                   self.mod_subtext, self.mod_fontsize, self.mod_datakey,
-                  self.mod_visible):
+                  self.mod_visible, self.mod_radius, self.mod_dist_threshold):
             w.blockSignals(False)
+
+
+    def _pick_mod_color(self):
+        row = self.module_list.currentRow()
+        if row < 0 or row >= len(self.ov.modules):
+            return
+        m = self.ov.modules[row]
+        current_rgba = getattr(m, "fill_color", getattr(m, "color", (255,255,255,255)))
+        c = QColorDialog.getColor(QColor(*current_rgba), self, "Modul-Farbe",
+                                  QColorDialog.ColorDialogOption.ShowAlphaChannel)
+        if c.isValid():
+            c_tuple = (c.red(), c.green(), c.blue(), c.alpha())
+            if hasattr(m, "fill_color"):
+                m.fill_color = c_tuple
+            else:
+                m.color = c_tuple
+            self._on_module_selected(row)  # Refresh button color
+            self.ov.rebuild()
 
     def _push_module(self, *_):
         row = self.module_list.currentRow()
@@ -266,9 +343,15 @@ class ArcSettingsWindow(QWidget):
             m.font_size = self.mod_fontsize.value()
         if isinstance(m, GraphModule):
             m.data_key = self.mod_datakey.text()
+        if hasattr(m, "radius_m"):
+            m.radius_m = self.mod_radius.value()
+        if hasattr(m, "dist_threshold"):
+            m.dist_threshold = self.mod_dist_threshold.value()
 
-        self._refresh_module_list()
-        self.module_list.setCurrentRow(row)
+        item = self.module_list.item(row)
+        if item:
+            item.setText(f"[{type(m).__name__[:-6]}] {m.name}")
+
         self.ov.rebuild()
 
     def _add_text(self):
@@ -294,6 +377,22 @@ class ArcSettingsWindow(QWidget):
         self._refresh_module_list()
         self.module_list.setCurrentRow(len(self.ov.modules) - 1)
 
+    def _add_radar(self):
+        m = RadarModule(name="Sonar Radar", t_start=0.45, t_end=0.55,
+                        radius_m=20.0, color=(80, 200, 255, 180),
+                        side="center", height=2.0)
+        self.ov.add_module(m)
+        self._refresh_module_list()
+        self.module_list.setCurrentRow(len(self.ov.modules) - 1)
+
+    def _add_brake(self):
+        m = BrakeIndicatorModule(name="Bremspunkt", t_start=0.3, t_end=0.7,
+                                 dist_threshold=30.0, fill_color=(255, 50, 50, 200),
+                                 side="outside", height=1.0)
+        self.ov.add_module(m)
+        self._refresh_module_list()
+        self.module_list.setCurrentRow(len(self.ov.modules) - 1)
+
     def _remove_module(self):
         row = self.module_list.currentRow()
         if row >= 0:
@@ -301,20 +400,3 @@ class ArcSettingsWindow(QWidget):
             self._refresh_module_list()
             self.detail_frame.hide()
 
-    # ── Speichern/Laden ───────────────────────────────────────────────
-    def _save(self):
-        self.ov.save_config(self.CONFIG_FILE)
-        self.setWindowTitle("⬡ Bügel Einstellungen (Gespeichert!)")
-
-    def _load(self):
-        self.ov.load_config(self.CONFIG_FILE)
-        # Sliders updaten
-        for key, s in self.sl.items():
-            val = getattr(self.ov, key, s.value())
-            s.blockSignals(True)
-            s.setValue(val)
-            s.blockSignals(False)
-        self.cb_round.setChecked(self.ov.round_caps)
-        self.color = QColor(self.ov.base_color)
-        self._refresh_module_list()
-        self.setWindowTitle("⬡ Bügel Einstellungen (Geladen!)")
