@@ -49,6 +49,8 @@ class ArcSettingsWindow(QWidget):
         self._slider(l1, "Kontrollpunkt X",     "ctrl_x",      -800, 1500, overlay.ctrl_x)
         self._slider(l1, "Scheitel-Abflachung", "ctrl_y_extra", -500, 1000, overlay.ctrl_y_extra)
         self._slider(l1, "Balken Dicke",        "base_thick",     8,  300, overlay.base_thick)
+        self._slider(l1, "Linker Rand (%)",     "arc_left_trim_pct", 0, 30, getattr(overlay, "arc_left_trim_pct", 0))
+        self._slider(l1, "Rechter Rand (%)",    "arc_right_trim_pct", 0, 30, getattr(overlay, "arc_right_trim_pct", 0))
         g1.setLayout(l1)
         root.addWidget(g1)
 
@@ -194,6 +196,20 @@ class ArcSettingsWindow(QWidget):
         row_color.addStretch(1)
         dl.addWidget(self.row_color)
 
+        self.row_brake_grad = QWidget()
+        row_bg = QHBoxLayout(self.row_brake_grad)
+        row_bg.setContentsMargins(0, 0, 0, 0)
+        row_bg.addWidget(QLabel("Startfarbe:"))
+        self.btn_brake_start_color = QPushButton("Startfarbe …")
+        self.btn_brake_start_color.clicked.connect(self._pick_brake_start_color)
+        row_bg.addWidget(self.btn_brake_start_color)
+        row_bg.addWidget(QLabel("Endfarbe:"))
+        self.btn_brake_end_color = QPushButton("Endfarbe …")
+        self.btn_brake_end_color.clicked.connect(self._pick_brake_end_color)
+        row_bg.addWidget(self.btn_brake_end_color)
+        row_bg.addStretch(1)
+        dl.addWidget(self.row_brake_grad)
+
         self.row_brake_overlay_1 = QWidget()
         row_bo1 = QHBoxLayout(self.row_brake_overlay_1)
         row_bo1.setContentsMargins(0, 0, 0, 0)
@@ -239,6 +255,7 @@ class ArcSettingsWindow(QWidget):
         self.mod_fill_direction = QComboBox()
         self.mod_fill_direction.addItem("Start -> Ende", "start_to_end")
         self.mod_fill_direction.addItem("Ende -> Start", "end_to_start")
+        self.mod_fill_direction.addItem("Außen -> Innen", "outside_to_inside")
         self.mod_fill_direction.currentIndexChanged.connect(self._push_module)
         row_bo3.addWidget(self.mod_fill_direction)
         row_bo3.addStretch(1)
@@ -253,6 +270,12 @@ class ArcSettingsWindow(QWidget):
         self.mod_tyre_alpha.setToolTip("Höher = reagiert schneller, niedriger = ruhiger.")
         self.mod_tyre_alpha.valueChanged.connect(self._push_module)
         row_tyre.addWidget(self.mod_tyre_alpha)
+        row_tyre.addWidget(QLabel("Rot bei (%):"))
+        self.mod_tyre_red_at = QDoubleSpinBox()
+        self.mod_tyre_red_at.setRange(1.0, 100.0); self.mod_tyre_red_at.setSingleStep(1.0); self.mod_tyre_red_at.setDecimals(0)
+        self.mod_tyre_red_at.setToolTip("Ab diesem Verschleiss ist die Farbe maximal rot.")
+        self.mod_tyre_red_at.valueChanged.connect(self._push_module)
+        row_tyre.addWidget(self.mod_tyre_red_at)
         row_tyre.addStretch(1)
         dl.addWidget(self.row_tyre)
 
@@ -389,6 +412,8 @@ class ArcSettingsWindow(QWidget):
             ctrl_x=self.sl["ctrl_x"].value(),
             ctrl_y_extra=self.sl["ctrl_y_extra"].value(),
             base_thick=self.sl["base_thick"].value(),
+            arc_left_trim_pct=self.sl["arc_left_trim_pct"].value(),
+            arc_right_trim_pct=self.sl["arc_right_trim_pct"].value(),
             win_w=self.sl["win_w"].value(),
             win_h=self.sl["win_h"].value(),
             base_color=self.color,
@@ -409,10 +434,11 @@ class ArcSettingsWindow(QWidget):
         is_delta = isinstance(m, RelativeDeltaModule)
         self.row_radius.setVisible(is_radar)
         self.row_dist.setVisible(is_brake)
-        self.row_color.setVisible(not is_brake_overlay)
+        self.row_color.setVisible((not is_brake_overlay) and (not is_brake))
+        self.row_brake_grad.setVisible(is_brake)
         self.row_brake_overlay_1.setVisible(is_brake_overlay)
         self.row_brake_overlay_2.setVisible(is_brake_overlay)
-        self.row_brake_overlay_3.setVisible(is_brake_overlay)
+        self.row_brake_overlay_3.setVisible(is_brake_overlay or is_brake)
         self.row_tyre.setVisible(is_tyre)
         self.row_delta_1.setVisible(is_delta)
         self.row_delta_2.setVisible(is_delta)
@@ -430,7 +456,7 @@ class ArcSettingsWindow(QWidget):
                   self.mod_side, self.mod_height, self.mod_text,
                   self.mod_subtext, self.mod_fontsize, self.mod_datakey,
                   self.mod_visible, self.mod_radius, self.mod_dist_threshold,
-                  self.mod_tyre_alpha,
+                  self.mod_tyre_alpha, self.mod_tyre_red_at,
                   self.mod_delta_scale, self.mod_delta_alpha, self.mod_delta_decay,
                   self.mod_ref_opacity, self.mod_ref_opacity_slider,
                   self.mod_live_opacity, self.mod_live_opacity_slider,
@@ -457,19 +483,33 @@ class ArcSettingsWindow(QWidget):
             self.mod_dist_threshold.setValue(m.dist_threshold)
         if hasattr(m, "smoothing_alpha"):
             self.mod_tyre_alpha.setValue(m.smoothing_alpha)
+        if hasattr(m, "red_at_wear_pct"):
+            self.mod_tyre_red_at.setValue(m.red_at_wear_pct)
         if hasattr(m, "speed_scale"):
             self.mod_delta_scale.setValue(m.speed_scale)
         if hasattr(m, "response_alpha"):
             self.mod_delta_alpha.setValue(m.response_alpha)
         if hasattr(m, "decay_factor"):
             self.mod_delta_decay.setValue(m.decay_factor)
-        if isinstance(m, BrakeOverlayModule):
-            self.mod_ref_opacity.setValue(int(m.ref_opacity))
-            self.mod_live_opacity.setValue(int(m.live_opacity))
-            idx = self.mod_fill_direction.findData(m.fill_direction)
+        if hasattr(m, "fill_direction"):
+            idx = self.mod_fill_direction.findData(getattr(m, "fill_direction", "start_to_end"))
             if idx < 0:
                 idx = 0
             self.mod_fill_direction.setCurrentIndex(idx)
+        if isinstance(m, BrakeIndicatorModule):
+            s = m.fill_color_start
+            e = m.fill_color_end
+            s_hex = QColor(*s).name()
+            e_hex = QColor(*e).name()
+            self.btn_brake_start_color.setStyleSheet(
+                f"background-color: {s_hex}; font-weight: bold; color: {'white' if s[0] < 150 else 'black'};"
+            )
+            self.btn_brake_end_color.setStyleSheet(
+                f"background-color: {e_hex}; font-weight: bold; color: {'white' if e[0] < 150 else 'black'};"
+            )
+        if isinstance(m, BrakeOverlayModule):
+            self.mod_ref_opacity.setValue(int(m.ref_opacity))
+            self.mod_live_opacity.setValue(int(m.live_opacity))
             ref_hex = QColor(*m.ref_color_rgb).name()
             self.btn_brake_overlay_ref_color.setStyleSheet(
                 f"background-color: {ref_hex}; font-weight: bold; color: {'white' if m.ref_color_rgb[0] < 150 else 'black'};"
@@ -488,7 +528,7 @@ class ArcSettingsWindow(QWidget):
                   self.mod_side, self.mod_height, self.mod_text,
                   self.mod_subtext, self.mod_fontsize, self.mod_datakey,
                   self.mod_visible, self.mod_radius, self.mod_dist_threshold,
-                  self.mod_tyre_alpha,
+                  self.mod_tyre_alpha, self.mod_tyre_red_at,
                   self.mod_delta_scale, self.mod_delta_alpha, self.mod_delta_decay,
                   self.mod_ref_opacity, self.mod_ref_opacity_slider,
                   self.mod_live_opacity, self.mod_live_opacity_slider,
@@ -501,7 +541,7 @@ class ArcSettingsWindow(QWidget):
         if row < 0 or row >= len(self.ov.modules):
             return
         m = self.ov.modules[row]
-        if isinstance(m, BrakeOverlayModule):
+        if isinstance(m, (BrakeOverlayModule, BrakeIndicatorModule)):
             return
         current_rgba = getattr(m, "fill_color", getattr(m, "color", (255,255,255,255)))
         c = QColorDialog.getColor(QColor(*current_rgba), self, "Modul-Farbe",
@@ -513,6 +553,32 @@ class ArcSettingsWindow(QWidget):
             else:
                 m.color = c_tuple
             self._on_module_selected(row)  # Refresh button color
+            self.ov.rebuild()
+
+    def _pick_brake_start_color(self):
+        row = self.module_list.currentRow()
+        if row < 0 or row >= len(self.ov.modules):
+            return
+        m = self.ov.modules[row]
+        if not isinstance(m, BrakeIndicatorModule):
+            return
+        c = QColorDialog.getColor(QColor(*m.fill_color_start), self, "Startfarbe wählen")
+        if c.isValid():
+            m.fill_color_start = (c.red(), c.green(), c.blue(), c.alpha())
+            self._on_module_selected(row)
+            self.ov.rebuild()
+
+    def _pick_brake_end_color(self):
+        row = self.module_list.currentRow()
+        if row < 0 or row >= len(self.ov.modules):
+            return
+        m = self.ov.modules[row]
+        if not isinstance(m, BrakeIndicatorModule):
+            return
+        c = QColorDialog.getColor(QColor(*m.fill_color_end), self, "Endfarbe wählen")
+        if c.isValid():
+            m.fill_color_end = (c.red(), c.green(), c.blue(), c.alpha())
+            self._on_module_selected(row)
             self.ov.rebuild()
 
     def _pick_brake_overlay_ref_color(self):
@@ -566,16 +632,19 @@ class ArcSettingsWindow(QWidget):
             m.dist_threshold = self.mod_dist_threshold.value()
         if hasattr(m, "smoothing_alpha"):
             m.smoothing_alpha = self.mod_tyre_alpha.value()
+        if hasattr(m, "red_at_wear_pct"):
+            m.red_at_wear_pct = self.mod_tyre_red_at.value()
         if hasattr(m, "speed_scale"):
             m.speed_scale = self.mod_delta_scale.value()
         if hasattr(m, "response_alpha"):
             m.response_alpha = self.mod_delta_alpha.value()
         if hasattr(m, "decay_factor"):
             m.decay_factor = self.mod_delta_decay.value()
+        if hasattr(m, "fill_direction"):
+            m.fill_direction = str(self.mod_fill_direction.currentData() or "start_to_end")
         if isinstance(m, BrakeOverlayModule):
             m.ref_opacity = self.mod_ref_opacity.value()
             m.live_opacity = self.mod_live_opacity.value()
-            m.fill_direction = str(self.mod_fill_direction.currentData() or "start_to_end")
 
         item = self.module_list.item(row)
         if item:
@@ -652,7 +721,10 @@ class ArcSettingsWindow(QWidget):
 
     def _add_brake(self):
         m = BrakeIndicatorModule(name="Bremspunkt", t_start=0.3, t_end=0.7,
-                                 dist_threshold=30.0, fill_color=(255, 50, 50, 200),
+                                 dist_threshold=30.0,
+                                 fill_color_start=(60, 120, 255, 220),
+                                 fill_color_end=(255, 50, 50, 220),
+                                 fill_direction="start_to_end",
                                  side="outside", height=1.0)
         self.ov.add_module(m)
         self._refresh_module_list()

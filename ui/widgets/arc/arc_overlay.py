@@ -33,6 +33,8 @@ class ArcOverlayWidget(QWidget):
         self.base_thick: int = 60
         self.base_color: QColor = QColor(25, 28, 35, 255)
         self.round_caps: bool = True
+        self.arc_left_trim_pct: int = 0
+        self.arc_right_trim_pct: int = 0
 
         # Module
         self.modules: list[ArcModule] = []
@@ -100,20 +102,85 @@ class ArcOverlayWidget(QWidget):
             self._cached_pc = PathCache(self.base_path())
         return self._cached_pc
 
+    def _visible_t_range(self) -> tuple[float, float]:
+        left = max(0.0, min(90.0, float(self.arc_left_trim_pct)))
+        right = max(0.0, min(90.0, float(self.arc_right_trim_pct)))
+        t_min = left / 100.0
+        t_max = 1.0 - (right / 100.0)
+
+        min_span = 0.05
+        if t_max - t_min < min_span:
+            mid = (t_min + t_max) * 0.5
+            t_min = max(0.0, mid - (min_span * 0.5))
+            t_max = min(1.0, mid + (min_span * 0.5))
+            if t_max - t_min < min_span:
+                if t_min <= 0.0:
+                    t_max = min(1.0, min_span)
+                else:
+                    t_min = max(0.0, 1.0 - min_span)
+        return t_min, t_max
+
+    @staticmethod
+    def _segment_path(path: PathCache, t0: float, t1: float, steps: int = 140) -> QPainterPath:
+        seg = QPainterPath()
+        if t1 <= t0:
+            pt = point_at(path, t0, 0.0)
+            seg.moveTo(pt)
+            seg.lineTo(pt)
+            return seg
+        for i in range(steps + 1):
+            t = t0 + (t1 - t0) * (i / steps)
+            pt = point_at(path, t, 0.0)
+            if i == 0:
+                seg.moveTo(pt)
+            else:
+                seg.lineTo(pt)
+        return seg
+
+    @staticmethod
+    def _effective_module_range(mod: ArcModule, t_min: float, t_max: float) -> tuple[float, float]:
+        start = float(mod.t_start)
+        end = float(mod.t_end)
+        if end < start:
+            start, end = end, start
+
+        vis_span = max(0.0, t_max - t_min)
+        mod_span = max(0.0, end - start)
+        if vis_span <= 0.0:
+            return t_min, t_min
+        if mod_span >= vis_span:
+            return t_min, t_max
+
+        if start < t_min:
+            delta = t_min - start
+            start += delta
+            end += delta
+        if end > t_max:
+            delta = end - t_max
+            start -= delta
+            end -= delta
+
+        start = max(t_min, min(t_max, start))
+        end = max(t_min, min(t_max, end))
+        if end < start:
+            end = start
+        return start, end
+
     # ── Maske ────────────────────────────────────────────────────────
     def _update_mask(self) -> None:
         pm = QPixmap(self.size())
         pm.fill(Qt.GlobalColor.transparent)
         p = QPainter(pm)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bp = self.base_path()
         pc = self.cached_path()
+        t_min, t_max = self._visible_t_range()
+        bp_seg = self._segment_path(pc, t_min, t_max)
 
         # Basislinie
         pen = QPen(Qt.GlobalColor.white, self.base_thick)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap if self.round_caps else Qt.PenCapStyle.FlatCap)
         p.setPen(pen)
-        p.drawPath(bp)
+        p.drawPath(bp_seg)
 
         # Module
         p.setPen(Qt.PenStyle.NoPen)
@@ -121,7 +188,11 @@ class ArcOverlayWidget(QWidget):
         ht = self.base_thick / 2
         for mod in self.modules:
             if mod.visible:
+                old_start, old_end = mod.t_start, mod.t_end
+                eff_start, eff_end = self._effective_module_range(mod, t_min, t_max)
+                mod.t_start, mod.t_end = eff_start, eff_end
                 mp = mod.mask_path(pc, ht)
+                mod.t_start, mod.t_end = old_start, old_end
                 if mp:
                     p.drawPath(mp)
         p.end()
@@ -131,22 +202,23 @@ class ArcOverlayWidget(QWidget):
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bp = self.base_path()
         pc = self.cached_path()
+        t_min, t_max = self._visible_t_range()
+        bp_seg = self._segment_path(pc, t_min, t_max)
         ht = self.base_thick / 2
 
         # Basisbalken
         pen = QPen(self.base_color, self.base_thick)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap if self.round_caps else Qt.PenCapStyle.FlatCap)
         p.setPen(pen)
-        p.drawPath(bp)
+        p.drawPath(bp_seg)
 
         # Kanten-Highlights
         p.setPen(QPen(QColor(80, 180, 255, 40), 1))
         for off in [ht, -ht]:
             edge = QPainterPath()
             for i in range(101):
-                t = i / 100.0
+                t = t_min + (t_max - t_min) * (i / 100.0)
                 pt = point_at(pc, t, off)
                 edge.moveTo(pt) if i == 0 else edge.lineTo(pt)
             p.drawPath(edge)
@@ -154,7 +226,11 @@ class ArcOverlayWidget(QWidget):
         # Module zeichnen
         for mod in self.modules:
             if mod.visible:
+                old_start, old_end = mod.t_start, mod.t_end
+                eff_start, eff_end = self._effective_module_range(mod, t_min, t_max)
+                mod.t_start, mod.t_end = eff_start, eff_end
                 mod.paint(p, pc, ht)
+                mod.t_start, mod.t_end = old_start, old_end
 
         p.end()
 
@@ -178,6 +254,8 @@ class ArcOverlayWidget(QWidget):
                 "bezier_w": self.bezier_w, "bezier_h": self.bezier_h,
                 "ctrl_x": self.ctrl_x, "ctrl_y_extra": self.ctrl_y_extra,
                 "base_thick": self.base_thick, "round_caps": self.round_caps,
+                "arc_left_trim_pct": self.arc_left_trim_pct,
+                "arc_right_trim_pct": self.arc_right_trim_pct,
                 "base_color": [self.base_color.red(), self.base_color.green(),
                                self.base_color.blue(), self.base_color.alpha()],
             },
@@ -193,7 +271,8 @@ class ArcOverlayWidget(QWidget):
             data = json.load(f)
         arc = data.get("arc", {})
         for k in ("win_w", "win_h", "bezier_w", "bezier_h",
-                   "ctrl_x", "ctrl_y_extra", "base_thick", "round_caps"):
+                   "ctrl_x", "ctrl_y_extra", "base_thick", "round_caps",
+                   "arc_left_trim_pct", "arc_right_trim_pct"):
             if k in arc:
                 setattr(self, k, arc[k])
         if "base_color" in arc:

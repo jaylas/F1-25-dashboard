@@ -104,10 +104,13 @@ class ArcModule:
                 radius_m=d.get("radius_m", 20.0),
             )
         elif cls == BrakeIndicatorModule:
+            legacy_fill = tuple(d.get("fill_color", [255, 50, 50, 200]))
             return BrakeIndicatorModule(
                 **base_kw,
                 dist_threshold=d.get("dist_threshold", 20.0),
-                fill_color=tuple(d.get("fill_color", [255, 50, 50, 200])),
+                fill_color_start=tuple(d.get("fill_color_start", legacy_fill)),
+                fill_color_end=tuple(d.get("fill_color_end", legacy_fill)),
+                fill_direction=d.get("fill_direction", "start_to_end"),
             )
         elif cls == BrakeOverlayModule:
             ref_rgb = tuple(d.get("ref_color_rgb", [255, 50, 50]))
@@ -133,6 +136,7 @@ class ArcModule:
                 **base_kw,
                 show_values=d.get("show_values", True),
                 smoothing_alpha=d.get("smoothing_alpha", 0.35),
+                red_at_wear_pct=d.get("red_at_wear_pct", 60.0),
             )
         elif cls == RelativeDeltaModule:
             return RelativeDeltaModule(
@@ -439,7 +443,9 @@ class BarModule(ArcModule):
 class BrakeIndicatorModule(ArcModule):
     """Zieht einen Balken auf, der sich füllt, je näher man dem Bremspunkt kommt."""
     dist_threshold: float = 20.0                  # Sichtbare Distanz zum Bremspunkt (Meter)
-    fill_color: tuple[int, int, int, int] = (255, 50, 50, 200) # Rote Warnfarbe
+    fill_color_start: tuple[int, int, int, int] = (60, 120, 255, 220)
+    fill_color_end: tuple[int, int, int, int] = (255, 50, 50, 220)
+    fill_direction: str = "start_to_end"          # start_to_end | end_to_start | outside_to_inside
 
     _current_distance: float = 0.0
     _ref_samples: list[tuple[float, float]] = field(default_factory=list, repr=False)
@@ -451,6 +457,18 @@ class BrakeIndicatorModule(ArcModule):
 
     def set_current_distance(self, dist: float) -> None:
         self._current_distance = dist
+
+    @staticmethod
+    def _mix_color(c0: tuple[int, int, int, int], c1: tuple[int, int, int, int], ratio: float) -> QColor:
+        r = max(0.0, min(1.0, float(ratio)))
+        a0 = c0[3] if len(c0) > 3 else 220
+        a1 = c1[3] if len(c1) > 3 else 220
+        return QColor(
+            int(c0[0] + (c1[0] - c0[0]) * r),
+            int(c0[1] + (c1[1] - c0[1]) * r),
+            int(c0[2] + (c1[2] - c0[2]) * r),
+            int(a0 + (a1 - a0) * r),
+        )
 
     def paint(self, painter: QPainter, base_path: QPainterPath, ht: float) -> None:
         if not self.visible:
@@ -492,10 +510,31 @@ class BrakeIndicatorModule(ArcModule):
 
         # Füll-Balken
         if fill_ratio > 0.001:
-            t_fill = self.t_start + (self.t_end - self.t_start) * fill_ratio
-            fill = build_strip(base_path, self.t_start, t_fill, inner + 2, outer - 2)
-            painter.setBrush(QColor(*self.fill_color))
-            painter.drawPath(fill)
+            span = self.t_end - self.t_start
+            fill_col = self._mix_color(self.fill_color_start, self.fill_color_end, fill_ratio)
+            if self.fill_direction == "outside_to_inside":
+                mid = (self.t_start + self.t_end) * 0.5
+                half_fill = (span * 0.5) * fill_ratio
+                left_to = min(mid, self.t_start + half_fill)
+                right_from = max(mid, self.t_end - half_fill)
+                if left_to - self.t_start > 1e-6:
+                    left_fill = build_strip(base_path, self.t_start, left_to, inner + 2, outer - 2)
+                    painter.setBrush(fill_col)
+                    painter.drawPath(left_fill)
+                if self.t_end - right_from > 1e-6:
+                    right_fill = build_strip(base_path, right_from, self.t_end, inner + 2, outer - 2)
+                    painter.setBrush(fill_col)
+                    painter.drawPath(right_fill)
+            elif self.fill_direction == "end_to_start":
+                t_from = self.t_end - (span * fill_ratio)
+                fill = build_strip(base_path, t_from, self.t_end, inner + 2, outer - 2)
+                painter.setBrush(fill_col)
+                painter.drawPath(fill)
+            else:
+                t_fill = self.t_start + span * fill_ratio
+                fill = build_strip(base_path, self.t_start, t_fill, inner + 2, outer - 2)
+                painter.setBrush(fill_col)
+                painter.drawPath(fill)
 
         # Label
         t_mid = (self.t_start + self.t_end) / 2
@@ -518,7 +557,14 @@ class BrakeIndicatorModule(ArcModule):
 
     def to_dict(self):
         d = super().to_dict()
-        d.update(dist_threshold=self.dist_threshold, fill_color=list(self.fill_color))
+        d.update(
+            dist_threshold=self.dist_threshold,
+            fill_color_start=list(self.fill_color_start),
+            fill_color_end=list(self.fill_color_end),
+            # Legacy compatibility for old readers.
+            fill_color=list(self.fill_color_end),
+            fill_direction=self.fill_direction,
+        )
         return d
 
 
@@ -529,7 +575,7 @@ class BrakeOverlayModule(ArcModule):
     live_color_rgb: tuple[int, int, int] = (235, 235, 235)
     ref_opacity: int = 70
     live_opacity: int = 45
-    fill_direction: str = "start_to_end"  # start_to_end | end_to_start
+    fill_direction: str = "start_to_end"  # start_to_end | end_to_start | outside_to_inside
 
     _current_distance: float = 0.0
     _ref_samples: list[tuple[float, float]] = field(default_factory=list, repr=False)
@@ -566,12 +612,18 @@ class BrakeOverlayModule(ArcModule):
     def set_live_samples(self, samples: list[tuple[float, float]]) -> None:
         self._live_samples = samples
 
-    def _fill_bounds(self, ratio: float) -> tuple[float, float]:
+    def _fill_bounds(self, ratio: float) -> list[tuple[float, float]]:
         span = max(0.0, self.t_end - self.t_start)
         clipped = self._clamp01(ratio)
+        if self.fill_direction == "outside_to_inside":
+            mid = (self.t_start + self.t_end) * 0.5
+            half_fill = (span * 0.5) * clipped
+            left = (self.t_start, min(mid, self.t_start + half_fill))
+            right = (max(mid, self.t_end - half_fill), self.t_end)
+            return [left, right]
         if self.fill_direction == "end_to_start":
-            return self.t_end - (span * clipped), self.t_end
-        return self.t_start, self.t_start + (span * clipped)
+            return [(self.t_end - (span * clipped), self.t_end)]
+        return [(self.t_start, self.t_start + (span * clipped))]
 
     def paint(self, painter: QPainter, base_path: QPainterPath, ht: float) -> None:
         if not self.visible:
@@ -585,23 +637,23 @@ class BrakeOverlayModule(ArcModule):
 
         ref_value = self._sample_value_at(self._ref_samples, self._current_distance - self._ref_offset)
         if ref_value is not None:
-            t0, t1 = self._fill_bounds(ref_value)
-            if t1 - t0 > 1e-6:
-                ref_fill = build_strip(base_path, t0, t1, inner + 2, outer - 2)
-                ref_alpha = int(max(0, min(100, self.ref_opacity)) * 255 / 100)
-                rr, rg, rb = self.ref_color_rgb
-                painter.setBrush(QColor(rr, rg, rb, ref_alpha))
-                painter.drawPath(ref_fill)
+            for t0, t1 in self._fill_bounds(ref_value):
+                if t1 - t0 > 1e-6:
+                    ref_fill = build_strip(base_path, t0, t1, inner + 2, outer - 2)
+                    ref_alpha = int(max(0, min(100, self.ref_opacity)) * 255 / 100)
+                    rr, rg, rb = self.ref_color_rgb
+                    painter.setBrush(QColor(rr, rg, rb, ref_alpha))
+                    painter.drawPath(ref_fill)
 
         live_value = self._sample_value_at(self._live_samples, self._current_distance)
         if live_value is not None:
-            t0, t1 = self._fill_bounds(live_value)
-            if t1 - t0 > 1e-6:
-                live_fill = build_strip(base_path, t0, t1, inner + 2, outer - 2)
-                live_alpha = int(max(0, min(100, self.live_opacity)) * 255 / 100)
-                lr, lg, lb = self.live_color_rgb
-                painter.setBrush(QColor(lr, lg, lb, live_alpha))
-                painter.drawPath(live_fill)
+            for t0, t1 in self._fill_bounds(live_value):
+                if t1 - t0 > 1e-6:
+                    live_fill = build_strip(base_path, t0, t1, inner + 2, outer - 2)
+                    live_alpha = int(max(0, min(100, self.live_opacity)) * 255 / 100)
+                    lr, lg, lb = self.live_color_rgb
+                    painter.setBrush(QColor(lr, lg, lb, live_alpha))
+                    painter.drawPath(live_fill)
 
     def mask_path(self, base_path, ht):
         inner, outer = self._offsets(ht)
@@ -624,6 +676,7 @@ class TyreWearModule(ArcModule):
     """Kompakte 2x2 Darstellung fÃ¼r ReifenverschleiÃŸ (FL/FR/RL/RR)."""
     show_values: bool = True
     smoothing_alpha: float = 0.35
+    red_at_wear_pct: float = 60.0
     _tyre_wear: tuple[float, float, float, float] = field(default=(0.0, 0.0, 0.0, 0.0), repr=False)
 
     def set_tyre_wear(self, wear: tuple[float, float, float, float]) -> None:
@@ -634,12 +687,24 @@ class TyreWearModule(ArcModule):
             for old, new in zip(self._tyre_wear, target)
         )
 
-    @staticmethod
-    def _wear_color(wear_pct: float) -> QColor:
-        ratio = max(0.0, min(1.0, wear_pct / 100.0))
-        r = int(60 + 195 * ratio)
-        g = int(220 - 170 * ratio)
-        b = 60
+    def _wear_color(self, wear_pct: float) -> QColor:
+        # Reach full red at configured wear threshold and keep red above it.
+        red_at = max(1.0, min(100.0, float(self.red_at_wear_pct)))
+        t = max(0.0, min(1.0, wear_pct / red_at))
+        green = (60, 220, 60)
+        yellow = (255, 220, 60)
+        red = (255, 50, 60)
+
+        if t <= 0.5:
+            u = t / 0.5
+            r = int(green[0] + (yellow[0] - green[0]) * u)
+            g = int(green[1] + (yellow[1] - green[1]) * u)
+            b = int(green[2] + (yellow[2] - green[2]) * u)
+        else:
+            u = (t - 0.5) / 0.5
+            r = int(yellow[0] + (red[0] - yellow[0]) * u)
+            g = int(yellow[1] + (red[1] - yellow[1]) * u)
+            b = int(yellow[2] + (red[2] - yellow[2]) * u)
         return QColor(r, g, b, 220)
 
     def paint(self, painter: QPainter, base_path: QPainterPath, ht: float) -> None:
@@ -695,6 +760,7 @@ class TyreWearModule(ArcModule):
         d.update(
             show_values=self.show_values,
             smoothing_alpha=self.smoothing_alpha,
+            red_at_wear_pct=self.red_at_wear_pct,
         )
         return d
 
