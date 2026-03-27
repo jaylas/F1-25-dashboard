@@ -1,4 +1,5 @@
 import json
+import math
 import os
 from pathlib import Path
 
@@ -32,6 +33,9 @@ class LauncherWindow(QWidget):
         self.record_start_lap_number: int | None = None
         self.reference_samples: list[dict[str, float]] = []
         self.reference_track_length = 0.0
+        self._dbg_packet_counts: dict[int, int] = {0: 0, 2: 0, 6: 0, 10: 0}
+        self._dbg_last_session_by_id: dict[int, float] = {}
+        self._dbg_last_valid_tyre: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
         
         # Window Instances
         self._graph_window = None
@@ -174,6 +178,31 @@ class LauncherWindow(QWidget):
         grp_ref.setLayout(v_ref)
         layout.addWidget(grp_ref)
 
+        # Live Debug Sektion
+        grp_dbg = QGroupBox("Live Debug")
+        v_dbg = QVBoxLayout()
+        self.lbl_dbg_packets = QLabel("Packets 0/2/6/10: 0 / 0 / 0 / 0")
+        self.lbl_dbg_packets.setStyleSheet("color: #b8c4d0; font-family: Consolas;")
+        v_dbg.addWidget(self.lbl_dbg_packets)
+
+        self.lbl_dbg_tyre = QLabel("Tyre selected FL/FR/RL/RR: 0.0 / 0.0 / 0.0 / 0.0")
+        self.lbl_dbg_tyre.setStyleSheet("color: #b8c4d0; font-family: Consolas;")
+        v_dbg.addWidget(self.lbl_dbg_tyre)
+        self.lbl_dbg_tyre_raw = QLabel("Tyre raw wear: 0.0/0.0/0.0/0.0 | damage: 0.0/0.0/0.0/0.0")
+        self.lbl_dbg_tyre_raw.setStyleSheet("color: #8fa0ad; font-family: Consolas;")
+        v_dbg.addWidget(self.lbl_dbg_tyre_raw)
+
+        self.lbl_dbg_motion = QLabel("Opponents: 0 | Ahead gap: n/a")
+        self.lbl_dbg_motion.setStyleSheet("color: #b8c4d0; font-family: Consolas;")
+        v_dbg.addWidget(self.lbl_dbg_motion)
+
+        self.lbl_dbg_last_seen = QLabel("Last t[s] id0/id2/id6/id10: - / - / - / -")
+        self.lbl_dbg_last_seen.setStyleSheet("color: #8fa0ad; font-family: Consolas;")
+        v_dbg.addWidget(self.lbl_dbg_last_seen)
+
+        grp_dbg.setLayout(v_dbg)
+        layout.addWidget(grp_dbg)
+
     # ─── Telemetry Dispatching ──────────────────────────────────────────
     def _on_connection(self, active: bool):
         if active:
@@ -188,6 +217,7 @@ class LauncherWindow(QWidget):
         self._try_load_track_ref(track_name)
 
     def _on_telemetry(self, frame: TelemetryFrame):
+        self._update_live_debug(frame)
         # 1. Update Graph Window
         if self._graph_window is not None:
             self._graph_window.on_telemetry(frame)
@@ -224,6 +254,46 @@ class LauncherWindow(QWidget):
         if self.recording:
             self._record_sample(frame)
 
+    def _update_live_debug(self, frame: TelemetryFrame) -> None:
+        pid = int(frame.source_packet_id)
+        if pid in self._dbg_packet_counts:
+            self._dbg_packet_counts[pid] += 1
+            self._dbg_last_session_by_id[pid] = frame.session_time
+
+        c0 = self._dbg_packet_counts[0]
+        c2 = self._dbg_packet_counts[2]
+        c6 = self._dbg_packet_counts[6]
+        c10 = self._dbg_packet_counts[10]
+        self.lbl_dbg_packets.setText(f"Packets 0/2/6/10: {c0} / {c2} / {c6} / {c10}")
+
+        fl, fr, rl, rr = frame.tyre_wear
+        if any(v > 0.0 for v in (fl, fr, rl, rr)):
+            self._dbg_last_valid_tyre = (fl, fr, rl, rr)
+        self.lbl_dbg_tyre.setText(
+            f"Tyre selected FL/FR/RL/RR: {fl:.1f} / {fr:.1f} / {rl:.1f} / {rr:.1f} "
+            f"(last>0: {self._dbg_last_valid_tyre[0]:.1f}/{self._dbg_last_valid_tyre[1]:.1f}/{self._dbg_last_valid_tyre[2]:.1f}/{self._dbg_last_valid_tyre[3]:.1f})"
+        )
+        wfl, wfr, wrl, wrr = frame.tyre_wear_raw
+        dfl, dfr, drl, drr = frame.tyre_damage_raw
+        self.lbl_dbg_tyre_raw.setText(
+            f"Tyre raw wear: {wfl:.1f}/{wfr:.1f}/{wrl:.1f}/{wrr:.1f} | "
+            f"damage: {dfl:.1f}/{dfr:.1f}/{drl:.1f}/{drr:.1f}"
+        )
+
+        ahead = self._nearest_ahead_gap_m(frame)
+        gap_txt = "n/a" if ahead is None else f"{ahead:.1f} m"
+        self.lbl_dbg_motion.setText(
+            f"Opponents: {len(frame.opponents)} | Ahead gap: {gap_txt}"
+        )
+
+        def _last(pid_key: int) -> str:
+            v = self._dbg_last_session_by_id.get(pid_key)
+            return "-" if v is None else f"{v:.1f}"
+
+        self.lbl_dbg_last_seen.setText(
+            f"Last t[s] id0/id2/id6/id10: {_last(0)} / {_last(2)} / {_last(6)} / {_last(10)}"
+        )
+
     def _update_arc_data(self, frame: TelemetryFrame):
         current_dist = frame.lap_distance
         from ui.widgets.arc.modules import GraphModule, RadarModule
@@ -234,14 +304,24 @@ class LauncherWindow(QWidget):
         # or just let GraphModule maintain its own queue!
         # In the interest of not breaking Arc graphs, if graph_window exists, we use it.
         # Otherwise Arc graphs won't update their live curves seamlessly.
+        ahead_gap_m = self._nearest_ahead_gap_m(frame)
         
         if self._arc_overlay:
-            from ui.widgets.arc.modules import GraphModule, RadarModule, BrakeIndicatorModule
+            from ui.widgets.arc.modules import GraphModule, RadarModule, BrakeIndicatorModule, BrakeOverlayModule, TyreWearModule, RelativeDeltaModule
             for mod in self._arc_overlay.modules:
                 if isinstance(mod, RadarModule):
                     mod.update_telemetry(frame.player_pos, frame.player_forward, frame.player_right, frame.opponents)
                 elif isinstance(mod, BrakeIndicatorModule):
                     mod.set_current_distance(current_dist)
+                elif isinstance(mod, BrakeOverlayModule):
+                    mod.set_current_distance(current_dist)
+                    if self._graph_window is not None:
+                        mod.set_live_samples(self._graph_window.brake_graph._live_samples)
+                elif isinstance(mod, TyreWearModule):
+                    mod.set_tyre_wear(frame.tyre_wear)
+                elif isinstance(mod, RelativeDeltaModule):
+                    if frame.source_packet_id == 0:
+                        mod.update_gap(ahead_gap_m, frame.session_time)
                 elif isinstance(mod, GraphModule) and self._graph_window is not None:
                     if mod.data_key == "throttle":
                         mod.set_live_samples(self._graph_window.throttle_graph._live_samples, current_dist)
@@ -250,6 +330,40 @@ class LauncherWindow(QWidget):
                     elif mod.data_key == "gear":
                         mod.set_live_samples(self._graph_window.gear_graph._live_samples, current_dist)
             self._arc_overlay.update()
+
+    @staticmethod
+    def _nearest_ahead_gap_m(frame: TelemetryFrame) -> float | None:
+        px, _py, pz = frame.player_pos
+        fx, _fy, fz = frame.player_forward
+        rx, _ry, rz = frame.player_right
+
+        f_len = math.hypot(fx, fz)
+        r_len = math.hypot(rx, rz)
+        if f_len < 1e-6 or r_len < 1e-6:
+            return None
+
+        fx, fz = fx / f_len, fz / f_len
+        rx, rz = rx / r_len, rz / r_len
+
+        best_gap: float | None = None
+        best_score = float("inf")
+        for ox, _oy, oz in frame.opponents:
+            dx = ox - px
+            dz = oz - pz
+            longitudinal = dx * fx + dz * fz
+            lateral = dx * rx + dz * rz
+
+            if longitudinal <= 2.0:
+                continue
+            # More tolerant so this also works on corner entries/exits.
+            if abs(lateral) > 80.0:
+                continue
+            score = longitudinal + (abs(lateral) * 0.2)
+            if score < best_score:
+                best_score = score
+                best_gap = longitudinal
+
+        return best_gap
 
     # ─── Window Management ───────────────────────────────────────────────
     def _ensure_graph_window_exists(self):
@@ -392,7 +506,7 @@ class LauncherWindow(QWidget):
         # We don't need to push everything if we just want to update arc offset, but push is cheap enough.
         # It's cleaner to just update the arc modules.
         if self._arc_overlay is not None:
-            from ui.widgets.arc.modules import GraphModule, BrakeIndicatorModule
+            from ui.widgets.arc.modules import GraphModule, BrakeIndicatorModule, BrakeOverlayModule
             b_graph = [(s["lap_distance"], s.get("brake", 0.0)) for s in self.reference_samples]
             t_graph = [(s["lap_distance"], s.get("throttle", 0.0)) for s in self.reference_samples]
             g_graph = [(s["lap_distance"], s.get("gear", 1.0)) for s in self.reference_samples]
@@ -405,6 +519,8 @@ class LauncherWindow(QWidget):
                     elif mod.data_key == "gear":
                         mod.set_ref_samples(g_graph, offset)
                 elif isinstance(mod, BrakeIndicatorModule):
+                    mod.set_ref_samples(b_graph, offset)
+                elif isinstance(mod, BrakeOverlayModule):
                     mod.set_ref_samples(b_graph, offset)
 
     def _push_references_to_graphs(self):
@@ -421,7 +537,7 @@ class LauncherWindow(QWidget):
             offset = 0.0
             if self._graph_window is not None:
                  offset = self._graph_window.brake_graph._ref_offset
-            from ui.widgets.arc.modules import GraphModule, BrakeIndicatorModule
+            from ui.widgets.arc.modules import GraphModule, BrakeIndicatorModule, BrakeOverlayModule
             for mod in self._arc_overlay.modules:
                 if isinstance(mod, GraphModule):
                     if mod.data_key == "brake":
@@ -432,9 +548,11 @@ class LauncherWindow(QWidget):
                         mod.set_ref_samples(g_graph, offset)
                 elif isinstance(mod, BrakeIndicatorModule):
                     mod.set_ref_samples(b_graph, offset)
+                elif isinstance(mod, BrakeOverlayModule):
+                    mod.set_ref_samples(b_graph, offset)
 
     def _create_default_arc_modules(self) -> None:
-        from ui.widgets.arc.modules import GraphModule
+        from ui.widgets.arc.modules import GraphModule, TyreWearModule, RelativeDeltaModule
         ov = self._arc_overlay
         if not ov:
             return
@@ -461,6 +579,21 @@ class LauncherWindow(QWidget):
             side="outside", height=0.9,
             color=(255, 210, 60, 220), fill_color=(255, 210, 60, 60),
             data_key="gear", value_mode="gear"
+        ))
+        ov.modules.append(TyreWearModule(
+            name="ReifenverschleiÃŸ", t_start=0.52, t_end=0.78,
+            side="inside", height=1.0,
+            color=(255, 255, 255, 220),
+            show_values=True,
+        ))
+
+        ov.modules.append(RelativeDeltaModule(
+            name="Delta Vordermann", t_start=0.40, t_end=0.60,
+            side="inside", height=0.9,
+            color=(255, 255, 255, 220),
+            speed_scale=5.0,
+            response_alpha=0.35,
+            decay_factor=0.96,
         ))
 
     def _save_reference(self):

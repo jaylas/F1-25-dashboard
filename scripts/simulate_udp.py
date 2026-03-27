@@ -15,11 +15,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 PACKET_SESSION = 1
 PACKET_LAP_DATA = 2
 PACKET_CAR_TELEMETRY = 6
+PACKET_CAR_DAMAGE = 10
 
 HEADER_FORMAT = "<HBBBBBQfIIBB"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 LAP_DATA_SIZE = 57
 CAR_TELEMETRY_DATA_SIZE = 60
+CAR_DAMAGE_DATA_SIZE = 42
 
 # Offsets/Positions within structs (matching models.py)
 # Note: we need to pad the packets to the expected size
@@ -81,6 +83,14 @@ def pack_lap_data(lap_distance, lap_number, player_car_index=0):
     
     return bytes(packet_body)
 
+def pack_car_damage(tyre_wear, player_car_index=0):
+    num_cars = 22
+    packet_body = bytearray(num_cars * CAR_DAMAGE_DATA_SIZE)
+    base = player_car_index * CAR_DAMAGE_DATA_SIZE
+    # Raw F1 order: RL, RR, FL, FR (float, percent)
+    struct.pack_into("<ffff", packet_body, base + 0, *tyre_wear)
+    return bytes(packet_body)
+
 def pack_session_packet(track_id):
     # PacketSessionData
     packet_body = bytearray(200) # plenty of space
@@ -127,6 +137,7 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
     points = len(data["millis"])
+    track_length = max(1.0, float(max(data.get("distance", [5000.0]))))
     print(f"Starting simulation with {points} data points. Press Ctrl+C to stop.")
     
     lap_number = 1
@@ -195,11 +206,25 @@ def main():
 
                 # Session time for header
                 session_time = current_millis / 1000.0
+
+                # Simulate increasing tyre wear over lap distance and lap count.
+                lap_factor = max(0.0, float(lap_number - 1))
+                base_wear = (lap_factor * 8.5) + ((distance / track_length) * 9.0)
+                fl = min(100.0, max(0.0, base_wear + curr_brake * 4.0 + abs(curr_steering) * 2.0))
+                fr = min(100.0, max(0.0, base_wear + curr_brake * 3.5 + abs(curr_steering) * 2.0))
+                rl = min(100.0, max(0.0, base_wear + (1.0 - curr_throttle) * 1.5))
+                rr = min(100.0, max(0.0, base_wear + (1.0 - curr_throttle) * 1.5))
                 
                 # Pack and send Car Telemetry
                 header = pack_header(PACKET_CAR_TELEMETRY, session_time, frame_id)
                 telemetry = pack_car_telemetry(curr_throttle, curr_brake, gear, curr_steering)
                 sock.sendto(header + telemetry, (args.host, args.port))
+
+                # Send Car Damage (for tyre wear module)
+                header = pack_header(PACKET_CAR_DAMAGE, session_time, frame_id)
+                # Packet expects RL, RR, FL, FR
+                damage_pkt = pack_car_damage((rl, rr, fl, fr))
+                sock.sendto(header + damage_pkt, (args.host, args.port))
                 
                 # Send Lap Data
                 header = pack_header(PACKET_LAP_DATA, session_time, frame_id)

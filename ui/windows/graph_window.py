@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 
 from PyQt6.QtCore import QEvent, QPoint, QRectF, Qt, QTimer, pyqtSignal
@@ -503,7 +504,8 @@ class GraphWindow(QWidget):
             return
         current_dist = self.current_lap_distance
 
-        from ui.widgets.arc.modules import GraphModule, RadarModule
+        from ui.widgets.arc.modules import GraphModule, RadarModule, BrakeOverlayModule, TyreWearModule, RelativeDeltaModule
+        ahead_gap_m = self._nearest_ahead_gap_m(frame) if frame is not None else None
 
         for mod in ov.modules:
             if isinstance(mod, GraphModule):
@@ -514,10 +516,51 @@ class GraphWindow(QWidget):
                     mod.set_live_samples(self.brake_graph._live_samples, current_dist)
                 elif mod.data_key == "gear":
                     mod.set_live_samples(self.gear_graph._live_samples, current_dist)
+            elif isinstance(mod, BrakeOverlayModule):
+                mod.set_current_distance(current_dist)
+                mod.set_live_samples(self.brake_graph._live_samples)
             elif isinstance(mod, RadarModule) and frame is not None:
                 mod.update_telemetry(frame.player_pos, frame.player_forward, frame.player_right, frame.opponents)
+            elif isinstance(mod, TyreWearModule) and frame is not None:
+                mod.set_tyre_wear(frame.tyre_wear)
+            elif isinstance(mod, RelativeDeltaModule) and frame is not None:
+                if frame.source_packet_id == 0:
+                    mod.update_gap(ahead_gap_m, frame.session_time)
                 
         ov.update()
+
+    @staticmethod
+    def _nearest_ahead_gap_m(frame: TelemetryFrame) -> float | None:
+        px, _py, pz = frame.player_pos
+        fx, _fy, fz = frame.player_forward
+        rx, _ry, rz = frame.player_right
+
+        f_len = math.hypot(fx, fz)
+        r_len = math.hypot(rx, rz)
+        if f_len < 1e-6 or r_len < 1e-6:
+            return None
+
+        fx, fz = fx / f_len, fz / f_len
+        rx, rz = rx / r_len, rz / r_len
+
+        best_gap: float | None = None
+        best_score = float("inf")
+        for ox, _oy, oz in frame.opponents:
+            dx = ox - px
+            dz = oz - pz
+            longitudinal = dx * fx + dz * fz
+            lateral = dx * rx + dz * rz
+
+            if longitudinal <= 2.0:
+                continue
+            if abs(lateral) > 80.0:
+                continue
+            score = longitudinal + (abs(lateral) * 0.2)
+            if score < best_score:
+                best_score = score
+                best_gap = longitudinal
+
+        return best_gap
 
 
     def closeEvent(self, event) -> None:  # noqa: N802

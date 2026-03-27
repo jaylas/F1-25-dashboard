@@ -64,6 +64,9 @@ class ArcModule:
             "BarModule": BarModule,
             "RadarModule": RadarModule,
             "BrakeIndicatorModule": BrakeIndicatorModule,
+            "BrakeOverlayModule": BrakeOverlayModule,
+            "TyreWearModule": TyreWearModule,
+            "RelativeDeltaModule": RelativeDeltaModule,
         }
         cls = cls_map.get(d.get("type", ""), ArcModule)
         base_kw = {
@@ -105,6 +108,38 @@ class ArcModule:
                 **base_kw,
                 dist_threshold=d.get("dist_threshold", 20.0),
                 fill_color=tuple(d.get("fill_color", [255, 50, 50, 200])),
+            )
+        elif cls == BrakeOverlayModule:
+            ref_rgb = tuple(d.get("ref_color_rgb", [255, 50, 50]))
+            if len(ref_rgb) >= 3:
+                ref_rgb = (int(ref_rgb[0]), int(ref_rgb[1]), int(ref_rgb[2]))
+            else:
+                ref_rgb = (255, 50, 50)
+            live_rgb = tuple(d.get("live_color_rgb", [235, 235, 235]))
+            if len(live_rgb) >= 3:
+                live_rgb = (int(live_rgb[0]), int(live_rgb[1]), int(live_rgb[2]))
+            else:
+                live_rgb = (235, 235, 235)
+            return BrakeOverlayModule(
+                **base_kw,
+                ref_color_rgb=ref_rgb,
+                live_color_rgb=live_rgb,
+                ref_opacity=int(d.get("ref_opacity", 70)),
+                live_opacity=int(d.get("live_opacity", 45)),
+                fill_direction=d.get("fill_direction", "start_to_end"),
+            )
+        elif cls == TyreWearModule:
+            return TyreWearModule(
+                **base_kw,
+                show_values=d.get("show_values", True),
+                smoothing_alpha=d.get("smoothing_alpha", 0.35),
+            )
+        elif cls == RelativeDeltaModule:
+            return RelativeDeltaModule(
+                **base_kw,
+                speed_scale=d.get("speed_scale", 5.0),
+                response_alpha=d.get("response_alpha", 0.35),
+                decay_factor=d.get("decay_factor", 0.96),
             )
         return ArcModule(**base_kw)
 
@@ -484,6 +519,277 @@ class BrakeIndicatorModule(ArcModule):
     def to_dict(self):
         d = super().to_dict()
         d.update(dist_threshold=self.dist_threshold, fill_color=list(self.fill_color))
+        return d
+
+
+@dataclass
+class BrakeOverlayModule(ArcModule):
+    """Überlagert Referenz- und Live-Bremsbalken im selben Modul."""
+    ref_color_rgb: tuple[int, int, int] = (255, 50, 50)
+    live_color_rgb: tuple[int, int, int] = (235, 235, 235)
+    ref_opacity: int = 70
+    live_opacity: int = 45
+    fill_direction: str = "start_to_end"  # start_to_end | end_to_start
+
+    _current_distance: float = 0.0
+    _ref_samples: list[tuple[float, float]] = field(default_factory=list, repr=False)
+    _ref_offset: float = 0.0
+    _live_samples: list[tuple[float, float]] = field(default_factory=list, repr=False)
+
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        return max(0.0, min(1.0, float(value)))
+
+    @staticmethod
+    def _sample_value_at(samples: list[tuple[float, float]], distance_m: float) -> float | None:
+        if not samples:
+            return None
+        idx = bisect_left(samples, distance_m, key=lambda s: s[0])
+        if idx <= 0:
+            return samples[0][1]
+        if idx >= len(samples):
+            return samples[-1][1]
+        d0, v0 = samples[idx - 1]
+        d1, v1 = samples[idx]
+        if abs(d1 - d0) < 1e-6:
+            return v1
+        t = (distance_m - d0) / (d1 - d0)
+        return v0 + (v1 - v0) * t
+
+    def set_current_distance(self, dist: float) -> None:
+        self._current_distance = float(dist)
+
+    def set_ref_samples(self, samples: list[tuple[float, float]], offset: float = 0.0) -> None:
+        self._ref_samples = samples
+        self._ref_offset = float(offset)
+
+    def set_live_samples(self, samples: list[tuple[float, float]]) -> None:
+        self._live_samples = samples
+
+    def _fill_bounds(self, ratio: float) -> tuple[float, float]:
+        span = max(0.0, self.t_end - self.t_start)
+        clipped = self._clamp01(ratio)
+        if self.fill_direction == "end_to_start":
+            return self.t_end - (span * clipped), self.t_end
+        return self.t_start, self.t_start + (span * clipped)
+
+    def paint(self, painter: QPainter, base_path: QPainterPath, ht: float) -> None:
+        if not self.visible:
+            return
+
+        inner, outer = self._offsets(ht)
+        bg = build_strip(base_path, self.t_start, self.t_end, inner, outer)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(10, 14, 20, 160))
+        painter.drawPath(bg)
+
+        ref_value = self._sample_value_at(self._ref_samples, self._current_distance - self._ref_offset)
+        if ref_value is not None:
+            t0, t1 = self._fill_bounds(ref_value)
+            if t1 - t0 > 1e-6:
+                ref_fill = build_strip(base_path, t0, t1, inner + 2, outer - 2)
+                ref_alpha = int(max(0, min(100, self.ref_opacity)) * 255 / 100)
+                rr, rg, rb = self.ref_color_rgb
+                painter.setBrush(QColor(rr, rg, rb, ref_alpha))
+                painter.drawPath(ref_fill)
+
+        live_value = self._sample_value_at(self._live_samples, self._current_distance)
+        if live_value is not None:
+            t0, t1 = self._fill_bounds(live_value)
+            if t1 - t0 > 1e-6:
+                live_fill = build_strip(base_path, t0, t1, inner + 2, outer - 2)
+                live_alpha = int(max(0, min(100, self.live_opacity)) * 255 / 100)
+                lr, lg, lb = self.live_color_rgb
+                painter.setBrush(QColor(lr, lg, lb, live_alpha))
+                painter.drawPath(live_fill)
+
+    def mask_path(self, base_path, ht):
+        inner, outer = self._offsets(ht)
+        return build_strip(base_path, self.t_start, self.t_end, inner, outer)
+
+    def to_dict(self):
+        d = super().to_dict()
+        d.update(
+            ref_color_rgb=list(self.ref_color_rgb),
+            live_color_rgb=list(self.live_color_rgb),
+            ref_opacity=int(self.ref_opacity),
+            live_opacity=int(self.live_opacity),
+            fill_direction=self.fill_direction,
+        )
+        return d
+
+
+@dataclass
+class TyreWearModule(ArcModule):
+    """Kompakte 2x2 Darstellung fÃ¼r ReifenverschleiÃŸ (FL/FR/RL/RR)."""
+    show_values: bool = True
+    smoothing_alpha: float = 0.35
+    _tyre_wear: tuple[float, float, float, float] = field(default=(0.0, 0.0, 0.0, 0.0), repr=False)
+
+    def set_tyre_wear(self, wear: tuple[float, float, float, float]) -> None:
+        target = tuple(max(0.0, min(100.0, float(v))) for v in wear)
+        alpha = max(0.01, min(1.0, float(self.smoothing_alpha)))
+        self._tyre_wear = tuple(
+            old + (new - old) * alpha
+            for old, new in zip(self._tyre_wear, target)
+        )
+
+    @staticmethod
+    def _wear_color(wear_pct: float) -> QColor:
+        ratio = max(0.0, min(1.0, wear_pct / 100.0))
+        r = int(60 + 195 * ratio)
+        g = int(220 - 170 * ratio)
+        b = 60
+        return QColor(r, g, b, 220)
+
+    def paint(self, painter: QPainter, base_path: QPainterPath, ht: float) -> None:
+        if not self.visible:
+            return
+
+        inner, outer = self._offsets(ht)
+        zone = build_strip(base_path, self.t_start, self.t_end, inner, outer)
+
+        painter.save()
+        painter.setClipPath(zone)
+        painter.setPen(QPen(QColor(80, 200, 255, 30), 1))
+        painter.setBrush(QColor(10, 14, 20, 170))
+        painter.drawPath(zone)
+
+        t_mid = (self.t_start + self.t_end) / 2
+        mid_off = (inner + outer) / 2
+        pt = point_at(base_path, t_mid, mid_off)
+        rot = angle_at(base_path, t_mid)
+
+        painter.translate(pt)
+        painter.rotate(rot)
+
+        labels = ("", "", "", "")
+        positions = (
+            QRectF(-52, -26, 50, 22),
+            QRectF(2, -26, 50, 22),
+            QRectF(-52, 2, 50, 22),
+            QRectF(2, 2, 50, 22),
+        )
+
+        painter.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
+        for i, rect in enumerate(positions):
+            wear = self._tyre_wear[i]
+            painter.setPen(QPen(QColor(220, 220, 220, 100), 1))
+            painter.setBrush(self._wear_color(wear))
+            painter.drawRoundedRect(rect, 4, 4)
+
+            text = labels[i]
+            if self.show_values:
+                text = f"{labels[i]} {wear:.0f}%"
+            painter.setPen(QColor(20, 20, 20, 240))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+
+        painter.restore()
+
+    def mask_path(self, base_path, ht):
+        inner, outer = self._offsets(ht)
+        return build_strip(base_path, self.t_start, self.t_end, inner, outer)
+
+    def to_dict(self):
+        d = super().to_dict()
+        d.update(
+            show_values=self.show_values,
+            smoothing_alpha=self.smoothing_alpha,
+        )
+        return d
+
+
+@dataclass
+class RelativeDeltaModule(ArcModule):
+    """
+    Center-Bar: grÃ¼n bei AnnÃ¤herung an den Vordermann, rot bei Distanzverlust.
+    Wert ist eine normierte Relativgeschwindigkeits-Tendenz.
+    """
+    speed_scale: float = 5.0
+    response_alpha: float = 0.35
+    decay_factor: float = 0.96
+    _trend_value: float = field(default=0.0, repr=False)
+    _last_gap_m: float | None = field(default=None, repr=False)
+    _last_time_s: float | None = field(default=None, repr=False)
+    _closing_speed_ms: float = field(default=0.0, repr=False)
+
+    def update_gap(self, gap_m: float | None, session_time_s: float) -> None:
+        alpha = max(0.01, min(1.0, float(self.response_alpha)))
+        decay = max(0.50, min(0.999, float(self.decay_factor)))
+
+        if gap_m is None or session_time_s <= 0.0:
+            self._trend_value *= decay
+            self._last_gap_m = None
+            self._last_time_s = session_time_s if session_time_s > 0.0 else None
+            self._closing_speed_ms = 0.0
+            return
+
+        target = 0.0
+        if self._last_gap_m is not None and self._last_time_s is not None:
+            dt = session_time_s - self._last_time_s
+            if 0.005 < dt < 1.0:
+                closing_speed = (self._last_gap_m - gap_m) / dt
+                self._closing_speed_ms = closing_speed
+                scale = max(0.1, float(self.speed_scale))
+                target = max(-1.0, min(1.0, closing_speed / scale))
+        self._trend_value += (target - self._trend_value) * alpha
+        self._last_gap_m = gap_m
+        self._last_time_s = session_time_s
+
+    def paint(self, painter: QPainter, base_path: QPainterPath, ht: float) -> None:
+        if not self.visible:
+            return
+
+        inner, outer = self._offsets(ht)
+        bg = build_strip(base_path, self.t_start, self.t_end, inner, outer)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(10, 14, 20, 160))
+        painter.drawPath(bg)
+
+        t_mid = (self.t_start + self.t_end) / 2
+        amp_pos = self.t_end - t_mid
+        amp_neg = t_mid - self.t_start
+        v = max(-1.0, min(1.0, self._trend_value))
+
+        if v > 0.001:
+            t_to = t_mid + amp_pos * v
+            fill = build_strip(base_path, t_mid, t_to, inner + 2, outer - 2)
+            painter.setBrush(QColor(42, 232, 80, 220))
+            painter.drawPath(fill)
+        elif v < -0.001:
+            t_to = t_mid + amp_neg * v
+            fill = build_strip(base_path, t_to, t_mid, inner + 2, outer - 2)
+            painter.setBrush(QColor(232, 42, 42, 220))
+            painter.drawPath(fill)
+
+        # Center marker
+        top = point_at(base_path, t_mid, outer)
+        bot = point_at(base_path, t_mid, inner)
+        painter.setPen(QPen(QColor(255, 255, 255, 90), 1))
+        painter.drawLine(top, bot)
+
+        label_pt = point_at(base_path, t_mid, outer + 4)
+        rot = angle_at(base_path, t_mid)
+        painter.save()
+        painter.translate(label_pt)
+        painter.rotate(rot)
+        painter.setPen(QColor(220, 220, 220, 170))
+        painter.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
+        txt = f"{self.name} {self._closing_speed_ms:+.1f} m/s"
+        painter.drawText(QRectF(-90, -6, 180, 12), Qt.AlignmentFlag.AlignCenter, txt)
+        painter.restore()
+
+    def mask_path(self, base_path, ht):
+        inner, outer = self._offsets(ht)
+        return build_strip(base_path, self.t_start, self.t_end, inner, outer)
+
+    def to_dict(self):
+        d = super().to_dict()
+        d.update(
+            speed_scale=self.speed_scale,
+            response_alpha=self.response_alpha,
+            decay_factor=self.decay_factor,
+        )
         return d
 
 

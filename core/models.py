@@ -6,6 +6,7 @@ PACKET_MOTION_DATA = 0
 PACKET_SESSION = 1
 PACKET_LAP_DATA = 2
 PACKET_CAR_TELEMETRY = 6
+PACKET_CAR_DAMAGE = 10
 
 UDP_PORT = 20777
 HEADER_FORMAT = "<HBBBBBQfIIBB"
@@ -24,6 +25,11 @@ CAR_TELEMETRY_BRAKE_OFFSET = 10
 # Per Codemasters UDP layout the gear byte is near the start of CarTelemetryData.
 CAR_TELEMETRY_GEAR_OFFSET = 15
 CAR_TELEMETRY_GEAR_FALLBACK_OFFSETS = (33,)
+# CarDamageData starts with tyresWear[4] floats (order: RL, RR, FL, FR)
+CAR_DAMAGE_TYRE_WEAR_OFFSET = 0
+CAR_DAMAGE_TYRE_WEAR_VALUES = 4
+# F1 25 layout with tyreBlisters and extra fault bytes is 45 bytes per car.
+CAR_DAMAGE_DATA_SIZE_FALLBACK = 45
 
 # Session packet: m_trackId offset within session data (after header)
 SESSION_TRACK_ID_OFFSET = 7
@@ -80,11 +86,18 @@ class TelemetryFrame:
     lap_distance: float = 0.0
     lap_number: int = 0
     session_time: float = 0.0
+    source_packet_id: int = -1
     # Radar Data
     player_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     player_forward: tuple[float, float, float] = (0.0, 0.0, 1.0)
     player_right: tuple[float, float, float] = (1.0, 0.0, 0.0)
     opponents: list[tuple[float, float, float]] = None
+    # Normalized to FL, FR, RL, RR in percent (0-100)
+    tyre_wear: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    # Raw candidates from packet 10 (already normalized to FL, FR, RL, RR)
+    tyre_wear_raw: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    tyre_damage_raw: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    tyre_source: str = "none"  # none | wear
 
     def __post_init__(self):
         if self.opponents is None:

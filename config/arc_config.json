@@ -17,58 +17,75 @@
   },
   "modules": [
     {
-      "type": "GraphModule",
-      "name": "Brake",
-      "t_start": 0.03,
-      "t_end": 0.5,
-      "side": "inside",
-      "height": 0.9,
+      "type": "TyreWearModule",
+      "name": "Reifenverschlei\u00c3\u0178",
+      "t_start": 0.9300000000000002,
+      "t_end": 1.0,
+      "side": "center",
+      "height": 1.9,
       "color": [
         255,
-        50,
-        50,
+        255,
+        255,
         220
       ],
       "visible": true,
-      "data_key": "brake",
-      "fill_color": [
-        255,
-        50,
-        50,
-        60
-      ],
-      "value_mode": "percent"
+      "show_values": true,
+      "smoothing_alpha": 0.35
     },
     {
-      "type": "GraphModule",
-      "name": "Throttle",
-      "t_start": 0.03,
+      "type": "RelativeDeltaModule",
+      "name": "Delta Vordermann",
+      "t_start": 0.0,
       "t_end": 0.5,
-      "side": "outside",
-      "height": 0.9,
+      "side": "center",
+      "height": 1.5,
       "color": [
-        0,
         255,
-        100,
+        255,
+        255,
         220
       ],
       "visible": true,
-      "data_key": "throttle",
-      "fill_color": [
-        0,
+      "speed_scale": 20.0,
+      "response_alpha": 0.01,
+      "decay_factor": 0.5
+    },
+    {
+      "type": "BrakeOverlayModule",
+      "name": "Brems-Overlay",
+      "t_start": 0.5,
+      "t_end": 0.93,
+      "side": "inside",
+      "height": 1.0,
+      "color": [
         255,
-        100,
-        60
+        255,
+        255,
+        220
       ],
-      "value_mode": "percent"
+      "visible": true,
+      "ref_color_rgb": [
+        255,
+        50,
+        50
+      ],
+      "live_color_rgb": [
+        235,
+        235,
+        235
+      ],
+      "ref_opacity": 94,
+      "live_opacity": 45,
+      "fill_direction": "start_to_end"
     },
     {
       "type": "BrakeIndicatorModule",
       "name": "Bremspunkt",
       "t_start": 0.5,
-      "t_end": 0.97,
-      "side": "center",
-      "height": 1.9,
+      "t_end": 0.93,
+      "side": "outside",
+      "height": 1.0,
       "color": [
         255,
         255,
@@ -76,7 +93,7 @@
         200
       ],
       "visible": true,
-      "dist_threshold": 200.0,
+      "dist_threshold": 30.0,
       "fill_color": [
         255,
         50,

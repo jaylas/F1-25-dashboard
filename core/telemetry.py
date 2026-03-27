@@ -7,6 +7,9 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.models import (
     CAR_TELEMETRY_BRAKE_OFFSET,
+    CAR_DAMAGE_DATA_SIZE_FALLBACK,
+    CAR_DAMAGE_TYRE_WEAR_OFFSET,
+    CAR_DAMAGE_TYRE_WEAR_VALUES,
     CAR_TELEMETRY_DATA_SIZE,
     CAR_TELEMETRY_GEAR_FALLBACK_OFFSETS,
     CAR_TELEMETRY_GEAR_OFFSET,
@@ -18,6 +21,7 @@ from core.models import (
     LAP_DATA_SIZE,
     PACKET_MOTION_DATA,
     MOTION_DATA_SIZE,
+    PACKET_CAR_DAMAGE,
     PACKET_CAR_TELEMETRY,
     PACKET_LAP_DATA,
     PACKET_SESSION,
@@ -46,6 +50,7 @@ class TelemetryListener(QObject):
         self._lap_offset_found = False
         self._lap_distance_offset = DEFAULT_LAP_DISTANCE_OFFSET
         self._current_track_id: int = -1
+        self._player_car_index: int = 0
 
     def start(self) -> None:
         if self._running:
@@ -131,6 +136,10 @@ class TelemetryListener(QObject):
         except struct.error:
             return None
 
+        if 0 <= int(player_car_index) < 22:
+            self._player_car_index = int(player_car_index)
+        p_idx = self._player_car_index
+
         if packet_id == PACKET_SESSION:
             self._extract_track_id(data)
             return None
@@ -142,14 +151,19 @@ class TelemetryListener(QObject):
             lap_distance=self._latest_frame.lap_distance,
             lap_number=self._latest_frame.lap_number,
             session_time=session_time,
+            source_packet_id=int(packet_id),
             player_pos=self._latest_frame.player_pos,
             player_forward=self._latest_frame.player_forward,
             player_right=self._latest_frame.player_right,
             opponents=self._latest_frame.opponents,
+            tyre_wear=self._latest_frame.tyre_wear,
+            tyre_wear_raw=self._latest_frame.tyre_wear_raw,
+            tyre_damage_raw=self._latest_frame.tyre_damage_raw,
+            tyre_source=self._latest_frame.tyre_source,
         )
 
         if packet_id == PACKET_CAR_TELEMETRY:
-            b, t, g = self._extract_inputs(data, player_car_index)
+            b, t, g = self._extract_inputs(data, p_idx)
             if b is not None:
                 frame.brake = b
             if t is not None:
@@ -158,7 +172,7 @@ class TelemetryListener(QObject):
                 frame.gear = g
 
         elif packet_id == PACKET_MOTION_DATA:
-            pos, fwd, right, opps = self._extract_motion_data(data, player_car_index)
+            pos, fwd, right, opps = self._extract_motion_data(data, p_idx)
             if pos is not None:
                 frame.player_pos = pos
             if fwd is not None:
@@ -169,15 +183,23 @@ class TelemetryListener(QObject):
                 frame.opponents = opps
 
         elif packet_id == PACKET_LAP_DATA:
-            if not self._lap_offset_found and player_car_index == 0:
+            if not self._lap_offset_found and p_idx == 0:
                 self._probe_lap_offset(data)
-            lap_distance, lap_number = self._extract_lap_data(data, player_car_index)
+            lap_distance, lap_number = self._extract_lap_data(data, p_idx)
             if self._debug_count <= 20:
                 print(f"[LAP] dist={lap_distance}, lap={lap_number}")
             if lap_distance is not None:
                 frame.lap_distance = lap_distance
             if lap_number is not None:
                 frame.lap_number = lap_number
+        elif packet_id == PACKET_CAR_DAMAGE:
+            wear_raw, damage_raw = self._extract_tyre_sources(data, p_idx)
+            if wear_raw is not None:
+                frame.tyre_wear_raw = wear_raw
+                frame.tyre_wear = wear_raw
+                frame.tyre_source = "wear"
+            if damage_raw is not None:
+                frame.tyre_damage_raw = damage_raw
         else:
             return None
 
@@ -259,6 +281,74 @@ class TelemetryListener(QObject):
                 break
 
         return float(b), float(t), g_val
+
+    @staticmethod
+    def _extract_tyre_sources(
+        data: bytes,
+        player_car_index: int,
+    ) -> tuple[tuple[float, float, float, float] | None, tuple[float, float, float, float] | None]:
+        payload_size = len(data) - HEADER_SIZE
+        min_bytes = CAR_DAMAGE_TYRE_WEAR_OFFSET + (CAR_DAMAGE_TYRE_WEAR_VALUES * 4)
+        if payload_size < min_bytes or player_car_index < 0:
+            return None, None
+
+        stride_candidates: list[int] = []
+        if payload_size >= (22 * CAR_DAMAGE_DATA_SIZE_FALLBACK):
+            stride_candidates.append(CAR_DAMAGE_DATA_SIZE_FALLBACK)
+
+        # 22 cars is standard, but try other plausible divisors too.
+        for car_count in (22, 20):
+            dynamic_stride = payload_size // car_count
+            if dynamic_stride >= min_bytes:
+                stride_candidates.append(dynamic_stride)
+            remainder_stride = dynamic_stride + 1
+            if remainder_stride >= min_bytes:
+                stride_candidates.append(remainder_stride)
+
+        # Keep order and avoid duplicate candidates.
+        seen: set[int] = set()
+        strides = [s for s in stride_candidates if not (s in seen or seen.add(s))]
+
+        def _parse_at(base: int) -> tuple[tuple[float, float, float, float] | None, tuple[float, float, float, float] | None]:
+            wear_vals: tuple[float, float, float, float] | None = None
+            damage_vals: tuple[float, float, float, float] | None = None
+
+            # Wear float[4], raw order RL, RR, FL, FR.
+            if base + 16 <= len(data):
+                try:
+                    rl, rr, fl, fr = struct.unpack_from("<ffff", data, base)
+                    vals = (float(fl), float(fr), float(rl), float(rr))
+                    if all(0.0 <= v <= 100.0 for v in vals):
+                        wear_vals = vals
+                except struct.error:
+                    pass
+
+            # Tyre damage byte[4] right after wear block.
+            damage_off = base + 16
+            if damage_off + 4 <= len(data):
+                try:
+                    rl_b, rr_b, fl_b, fr_b = struct.unpack_from("<BBBB", data, damage_off)
+                    vals_b = (float(fl_b), float(fr_b), float(rl_b), float(rr_b))
+                    if all(0.0 <= v <= 100.0 for v in vals_b):
+                        damage_vals = vals_b
+                except struct.error:
+                    pass
+            return wear_vals, damage_vals
+
+        best_wear: tuple[float, float, float, float] | None = None
+        best_damage: tuple[float, float, float, float] | None = None
+
+        for stride in strides:
+            base = HEADER_SIZE + (player_car_index * stride) + CAR_DAMAGE_TYRE_WEAR_OFFSET
+            wear_vals, damage_vals = _parse_at(base)
+            if wear_vals is not None and any(v > 0.0 for v in wear_vals):
+                best_wear = wear_vals
+            if damage_vals is not None and any(v > 0.0 for v in damage_vals):
+                best_damage = damage_vals
+            if best_wear is not None or best_damage is not None:
+                return best_wear, best_damage
+
+        return best_wear, best_damage
 
     def _probe_lap_offset(self, data: bytes) -> None:
         base = HEADER_SIZE
